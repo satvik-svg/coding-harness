@@ -1,5 +1,12 @@
 import { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
-import { AgentActionType, AgentLoopResult, AgentStepLog, ToolResult } from '@coding-harness/shared';
+import {
+  AgentActionType,
+  AgentLoopResult,
+  AgentStepLog,
+  TaskMode,
+  ToolName,
+  ToolResult,
+} from '@coding-harness/shared';
 import { LLMClient } from './llmClient';
 import { ToolCallParser, ParsedToolCall } from './parser';
 import {
@@ -21,6 +28,7 @@ export interface AgentLoopOptions {
   llmClient?: LLMClient;
   maxIterations?: number;
   signal?: AbortSignal;
+  mode?: TaskMode;
   onProgress?: (message: string, stepLog?: AgentStepLog) => Promise<void> | void;
 }
 
@@ -68,8 +76,17 @@ export class AgentLoop {
       },
     ];
 
-    // Format all 6 tools for OpenAI function calling
-    const tools = LLMClient.formatToolsForOpenAI(ToolRegistry.getToolDefinitions());
+    // Format tools for OpenAI function calling (read-only mode omits write & shell tools)
+    const isReadOnly = options.mode === 'read';
+    const rawToolDefs = isReadOnly
+      ? ToolRegistry.getToolDefinitions().filter(
+          (t) =>
+            t.name !== ToolName.WRITE_FILE &&
+            t.name !== ToolName.REPLACE_FILE_CONTENT &&
+            t.name !== ToolName.RUN_COMMAND,
+        )
+      : ToolRegistry.getToolDefinitions();
+    const tools = LLMClient.formatToolsForOpenAI(rawToolDefs);
 
     let iteration = 0;
     let isCompleted = false;

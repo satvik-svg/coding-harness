@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 import readline from 'readline';
-import { AgentLoopResult } from '@coding-harness/shared';
+import { AgentLoopResult, TaskMode } from '@coding-harness/shared';
 
 const STRIPPED_CLAUDE_ENV_KEYS = [
   // Prevent npm/yarn/pnpm inside target repos from skipping devDependencies (e.g. typescript, jest, eslint)
@@ -30,11 +30,19 @@ const STRIPPED_CLAUDE_ENV_KEYS = [
   'VERTEXAI_LOCATION',
 ] as const;
 
-const HARNESS_SYSTEM_PROMPT = [
+export const HARNESS_SYSTEM_PROMPT = [
   'You are running inside Coding Harness on an isolated local Git clone of the repository.',
   'Work efficiently to stay within your turn budget: batch related file reads and commands instead of inspecting one file per turn.',
-  'Make fixes directly in the workspace and verify them where practical.',
+  'Make the requested fixes directly in the workspace and verify them where practical.',
+  'Stop immediately once the requested change is implemented and tests pass — do not spend extra turns chasing unrelated deprecation warnings, lint noise, or unrequested refactors.',
+  'Avoid running full package installs unless strictly required.',
   'Do not run git push or create a Pull Request via git/gh CLI (push credentials are not present here); leave your verified changes in the repository and provide a concise summary so Coding Harness can capture the Git diff and open the PR from the UI.',
+].join(' ');
+
+export const READ_ONLY_SYSTEM_PROMPT = [
+  'You are running inside Coding Harness in READ-ONLY analysis mode on a local Git clone of the repository.',
+  'Do NOT modify any files or run shell commands.',
+  'Inspect the codebase efficiently using read/search tools (batch related reads) and return a clear, concise, actionable analysis directly answering the user prompt, citing exact file paths and line numbers where relevant.',
 ].join(' ');
 
 /** Build a sanitized environment for the Claude Code child process. */
@@ -54,13 +62,22 @@ export async function runClaudeCode(options: {
   executable?: string;
   executableArgs?: string[];
   signal?: AbortSignal;
+  mode?: TaskMode;
 }): Promise<AgentLoopResult> {
   if (options.signal?.aborted) {
     return { success: false, cancelled: true, iterations: 0, totalToolCalls: 0, steps: [] };
   }
-  const model = process.env.CLAUDE_CODE_MODEL || 'gemini-3.5-flash';
-  const budget = process.env.CLAUDE_CODE_MAX_BUDGET_USD || '5.00';
-  const turns = process.env.CLAUDE_CODE_MAX_TURNS || '50';
+  const isReadOnly = options.mode === 'read';
+  const model = process.env.CLAUDE_CODE_MODEL || 'gemini-4-hydrogen';
+  const budget = (process.env.CLAUDE_CODE_MAX_BUDGET_USD || '15.00').trim();
+  const configuredTurns = Number(process.env.CLAUDE_CODE_MAX_TURNS || '30');
+  const turns = String(
+    isReadOnly
+      ? Math.min(Number.isFinite(configuredTurns) && configuredTurns > 0 ? configuredTurns : 30, 15)
+      : Number.isFinite(configuredTurns) && configuredTurns > 0
+        ? configuredTurns
+        : 30,
+  );
   const timeoutMs = Number(process.env.CLAUDE_CODE_TIMEOUT_MS || '900000');
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('Invalid Claude timeout');
 
@@ -71,14 +88,20 @@ export async function runClaudeCode(options: {
     'stream-json',
     '--model',
     model,
-    '--max-budget-usd',
-    budget,
     '--max-turns',
     turns,
     '--append-system-prompt',
-    HARNESS_SYSTEM_PROMPT,
+    isReadOnly ? READ_ONLY_SYSTEM_PROMPT : HARNESS_SYSTEM_PROMPT,
     '--dangerously-skip-permissions',
   ];
+
+  if (budget && budget !== '0' && budget.toLowerCase() !== 'off') {
+    args.push('--max-budget-usd', budget);
+  }
+
+  if (isReadOnly) {
+    args.push('--disallowedTools', 'Write,Edit,NotebookEdit,Bash');
+  }
   const child = spawn(
     options.executable || process.env.CLAUDE_CODE_BINARY || 'claude',
     [...(options.executableArgs || []), ...args],

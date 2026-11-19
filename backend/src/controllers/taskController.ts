@@ -62,7 +62,8 @@ export async function createTask(
 ): Promise<void> {
   try {
     const userId = requireUserId(req);
-    const { repoUrl, prompt, branch } = req.body;
+    const { repoUrl, prompt, branch, mode } = req.body;
+    const taskMode = mode === 'read' ? 'read' : 'edit';
     const uploadedFile = req.file;
 
     if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
@@ -107,6 +108,7 @@ export async function createTask(
         branch: branch ? branch.trim() : undefined,
         userId: task.userId,
         zipFilePath: uploadedFile?.path,
+        mode: taskMode,
       });
     } catch (queueError) {
       logger.warn(`Queue dispatch warning for task ${task.id}:`, queueError);

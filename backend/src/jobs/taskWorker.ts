@@ -18,8 +18,10 @@ import { SocketServer } from '../websocket/socketServer';
  * Manages task workspace setup, repo cloning/extraction, cancellation, and database status transitions.
  */
 export async function processTaskJob(job: Job<TaskJobData>): Promise<void> {
-  const { taskId, repoUrl, prompt, branch, zipFilePath } = job.data;
+  const { taskId, repoUrl, prompt, branch, zipFilePath, mode = 'edit' } = job.data;
   const startTime = new Date();
+  let workspacePath: string | null = null;
+  let baseCommit: string | undefined;
 
   logger.info(`Processing task job ${job.id} for task ${taskId}`);
 
@@ -66,8 +68,8 @@ export async function processTaskJob(job: Job<TaskJobData>): Promise<void> {
 
   try {
     // 3. Prepare clean workspace directory
-    await appendLogs('Preparing task workspace...');
-    const workspacePath = await GitService.prepareWorkspace(taskId);
+    await appendLogs(`Preparing task workspace (mode: ${mode === 'read' ? 'read-only analysis' : 'code & edit'})...`);
+    workspacePath = await GitService.prepareWorkspace(taskId);
 
     // 4. Source setup: Repository clone OR Zip archive extraction
     if (zipFilePath) {
@@ -90,7 +92,7 @@ export async function processTaskJob(job: Job<TaskJobData>): Promise<void> {
       throw new Error('TASK_CANCELLED');
     }
 
-    const baseCommit = await GitService.getHeadCommit(workspacePath);
+    baseCommit = await GitService.getHeadCommit(workspacePath);
 
     // 5. Docker Sandbox Container lifecycle
     let containerInfo: { containerId: string } | null = null;
@@ -120,7 +122,11 @@ export async function processTaskJob(job: Job<TaskJobData>): Promise<void> {
       }
 
       // 6. AI Agent Autonomous Execution Loop
-      await appendLogs('Starting autonomous AI Agent reasoning and tool execution loop...');
+      await appendLogs(
+        mode === 'read'
+          ? 'Starting read-only repository analysis...'
+          : 'Starting autonomous AI Agent reasoning and tool execution loop...',
+      );
       const agentResult =
         config.aiProvider === 'claude-code'
           ? await runClaudeCode({
@@ -128,6 +134,7 @@ export async function processTaskJob(job: Job<TaskJobData>): Promise<void> {
               prompt,
               onProgress: appendLogs,
               signal: activeHandle.signal,
+              mode,
             })
           : await AgentLoop.run({
               taskId,
@@ -135,6 +142,7 @@ export async function processTaskJob(job: Job<TaskJobData>): Promise<void> {
               prompt,
               containerId: containerInfo?.containerId,
               signal: activeHandle.signal,
+              mode,
               onProgress: async (logLine, stepLog) => {
                 await appendLogs(logLine);
                 if (stepLog) {
@@ -210,9 +218,24 @@ export async function processTaskJob(job: Job<TaskJobData>): Promise<void> {
 
     await appendLogs(`Task execution failed: ${err.message}`);
 
+    // Preserve any partial Git diff already produced before hitting a turn/budget limit
+    let partialDiff: string | null = null;
+    if (workspacePath && mode !== 'read') {
+      try {
+        const captured = await GitService.getGitDiff(workspacePath, baseCommit);
+        if (captured && captured.trim()) {
+          partialDiff = captured;
+          SocketServer.emitTaskDiff(taskId, captured);
+        }
+      } catch {
+        // Ignore diff capture errors on failed runs
+      }
+    }
+
     await prisma.session.update({
       where: { id: session.id },
       data: {
+        resultDiff: partialDiff,
         finishedAt: finishTime,
       },
     });

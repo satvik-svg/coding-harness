@@ -10,7 +10,11 @@ import {
   isTaskCancelled,
   unregisterActiveTask,
 } from '../src/jobs/taskRegistry';
-import { runClaudeCode } from '../src/agent/claudeCodeRunner';
+import {
+  runClaudeCode,
+  HARNESS_SYSTEM_PROMPT,
+  READ_ONLY_SYSTEM_PROMPT,
+} from '../src/agent/claudeCodeRunner';
 import { GitHubPrService } from '../src/services/githubPrService';
 import {
   isGitHubOAuthConfigured,
@@ -205,6 +209,42 @@ async function testPrepareWorkspaceCleansStaleFiles() {
   }
 }
 
+async function testReadOnlyModeAndCostGuardrails() {
+  assert.ok(
+    HARNESS_SYSTEM_PROMPT.includes('Stop immediately once the requested change is implemented'),
+    'Edit mode prompt must instruct agent to stop once done to save cost',
+  );
+  assert.ok(
+    READ_ONLY_SYSTEM_PROMPT.includes('READ-ONLY'),
+    'Read-only prompt must enforce read-only analysis',
+  );
+
+  let capturedArgs: string[] = [];
+  const res = await runClaudeCode({
+    workspacePath: process.cwd(),
+    prompt: 'explain architecture',
+    mode: 'read',
+    onProgress: async () => {},
+    executable: process.execPath,
+    executableArgs: [
+      '-e',
+      `const args = process.argv.slice(1);
+       console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: JSON.stringify(args) }));`,
+      '--',
+    ],
+  });
+
+  assert.strictEqual(res.success, true, 'Read-only run should succeed');
+  capturedArgs = JSON.parse(res.summary || '[]');
+  assert.ok(capturedArgs.includes('--disallowedTools'), 'Read-only mode must pass --disallowedTools');
+  const idx = capturedArgs.indexOf('--disallowedTools');
+  assert.strictEqual(
+    capturedArgs[idx + 1],
+    'Write,Edit,NotebookEdit,Bash',
+    'Read-only mode must disallow Write,Edit,NotebookEdit,Bash',
+  );
+}
+
 async function run() {
   await testTaskRegistryAndCancellation();
   await testClaudeCodeAbortSignal();
@@ -213,7 +253,8 @@ async function run() {
   testGitHubOAuthServiceAndRoutes();
   await testPrivateTaskRoutesRequireAuth();
   await testPrepareWorkspaceCleansStaleFiles();
-  console.log('All new feature + GitHub OAuth + private workspace + clean workspace tests passed.');
+  await testReadOnlyModeAndCostGuardrails();
+  console.log('All feature, OAuth, private workspace, and read-only mode tests passed.');
   process.exit(0);
 }
 

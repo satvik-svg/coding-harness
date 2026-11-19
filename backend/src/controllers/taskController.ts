@@ -44,6 +44,13 @@ function validateDemoGitHubUrl(repoUrl: unknown): void {
   }
 }
 
+function requireUserId(req: AuthenticatedRequest): string {
+  if (!req.user?.id) {
+    throw new AppError('Authentication required', 401, 'UNAUTHORIZED');
+  }
+  return req.user.id;
+}
+
 /**
  * Submit a new automated coding task.
  * Supports Git repository URLs or uploaded .zip repository archives.
@@ -54,6 +61,7 @@ export async function createTask(
   next: NextFunction,
 ): Promise<void> {
   try {
+    const userId = requireUserId(req);
     const { repoUrl, prompt, branch } = req.body;
     const uploadedFile = req.file;
 
@@ -80,10 +88,10 @@ export async function createTask(
       ? repoUrl.trim()
       : uploadedFile?.originalname || 'archive.zip';
 
-    // 1. Create Task record in database
+    // 1. Create Task record in database scoped strictly to the signed-in user
     const task = await prisma.task.create({
       data: {
-        userId: req.user?.id || null,
+        userId,
         repoUrl: taskRepoIdentifier,
         prompt: prompt.trim(),
         status: TaskStatus.PENDING,
@@ -128,13 +136,10 @@ export async function getTaskAnalytics(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const whereClause: { userId?: string } = {};
-    if (req.query.userOnly === 'true' && req.user?.id) {
-      whereClause.userId = req.user.id;
-    }
+    const userId = requireUserId(req);
 
     const tasks = await prisma.task.findMany({
-      where: whereClause,
+      where: { userId },
       orderBy: { createdAt: 'desc' },
       take: 200,
       include: {
@@ -248,10 +253,11 @@ export async function getTaskById(
   next: NextFunction,
 ): Promise<void> {
   try {
+    const userId = requireUserId(req);
     const { id } = req.params;
 
-    const task = await prisma.task.findUnique({
-      where: { id },
+    const task = await prisma.task.findFirst({
+      where: { id, userId },
       include: {
         sessions: {
           orderBy: { startedAt: 'desc' },
@@ -292,18 +298,15 @@ export async function listTasks(
   next: NextFunction,
 ): Promise<void> {
   try {
+    const userId = requireUserId(req);
     const limit = Math.min(Math.max(parseInt((req.query.limit as string) || '20', 10), 1), 100);
     const offset = Math.max(parseInt((req.query.offset as string) || '0', 10), 0);
     const status = req.query.status as TaskStatus | undefined;
 
     const whereClause: {
-      userId?: string;
+      userId: string;
       status?: TaskStatus;
-    } = {};
-
-    if (req.query.userOnly === 'true' && req.user?.id) {
-      whereClause.userId = req.user.id;
-    }
+    } = { userId };
 
     if (status && Object.values(TaskStatus).includes(status)) {
       whereClause.status = status;
@@ -345,10 +348,11 @@ export async function getTaskDiff(
   next: NextFunction,
 ): Promise<void> {
   try {
+    const userId = requireUserId(req);
     const { id } = req.params;
 
-    const task = await prisma.task.findUnique({
-      where: { id },
+    const task = await prisma.task.findFirst({
+      where: { id, userId },
       include: {
         sessions: {
           orderBy: { startedAt: 'desc' },
@@ -393,10 +397,11 @@ export async function cancelTask(
   next: NextFunction,
 ): Promise<void> {
   try {
+    const userId = requireUserId(req);
     const { id } = req.params;
 
-    const task = await prisma.task.findUnique({
-      where: { id },
+    const task = await prisma.task.findFirst({
+      where: { id, userId },
       include: {
         sessions: {
           orderBy: { startedAt: 'desc' },
@@ -470,10 +475,11 @@ export async function retryTask(
   next: NextFunction,
 ): Promise<void> {
   try {
+    const userId = requireUserId(req);
     const { id } = req.params;
     const { prompt: overridePrompt, branch: overrideBranch } = req.body || {};
 
-    const original = await prisma.task.findUnique({ where: { id } });
+    const original = await prisma.task.findFirst({ where: { id, userId } });
     if (!original) {
       throw new AppError(`Task with ID ${id} was not found`, 404, 'NOT_FOUND');
     }
@@ -498,7 +504,7 @@ export async function retryTask(
 
     const newTask = await prisma.task.create({
       data: {
-        userId: req.user?.id || original.userId || null,
+        userId,
         repoUrl,
         prompt: nextPrompt,
         status: TaskStatus.PENDING,
@@ -541,6 +547,7 @@ export async function createPullRequest(
   next: NextFunction,
 ): Promise<void> {
   try {
+    const userId = requireUserId(req);
     const { id } = req.params;
     const { githubToken, githubSession, branchName, baseBranch, title, body } = req.body || {};
 
@@ -573,8 +580,8 @@ export async function createPullRequest(
       );
     }
 
-    const task = await prisma.task.findUnique({
-      where: { id },
+    const task = await prisma.task.findFirst({
+      where: { id, userId },
       include: {
         sessions: {
           orderBy: { startedAt: 'desc' },

@@ -1,4 +1,6 @@
 import assert from 'assert';
+import http from 'http';
+import { createApp } from '../src/app';
 import {
   registerActiveTask,
   cancelActiveTask,
@@ -161,13 +163,39 @@ function testGitHubOAuthServiceAndRoutes() {
   assert.ok(routes.includes('/github/repos'), 'GET /github/repos must be mounted');
 }
 
+async function testPrivateTaskRoutesRequireAuth() {
+  const app = createApp();
+  const server = http.createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, () => resolve()));
+  const { port } = server.address() as { port: number };
+  const base = `http://127.0.0.1:${port}`;
+
+  try {
+    const listRes = await fetch(`${base}/api/tasks`);
+    assert.strictEqual(listRes.status, 401, 'GET /api/tasks must require auth (401)');
+
+    const analyticsRes = await fetch(`${base}/api/tasks/analytics`);
+    assert.strictEqual(analyticsRes.status, 401, 'GET /api/tasks/analytics must require auth (401)');
+
+    const createRes = await fetch(`${base}/api/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repoUrl: 'https://github.com/octocat/Hello-World', prompt: 'test' }),
+    });
+    assert.strictEqual(createRes.status, 401, 'POST /api/tasks must require auth (401)');
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
 async function run() {
   await testTaskRegistryAndCancellation();
   await testClaudeCodeAbortSignal();
   await testGitHubPrValidation();
   testTaskRoutesRegistered();
   testGitHubOAuthServiceAndRoutes();
-  console.log('All new feature + GitHub OAuth backend tests passed.');
+  await testPrivateTaskRoutesRequireAuth();
+  console.log('All new feature + GitHub OAuth + private workspace backend tests passed.');
   process.exit(0);
 }
 

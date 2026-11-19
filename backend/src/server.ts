@@ -1,0 +1,66 @@
+import http from 'http';
+import { createApp } from './app';
+import { config } from './config';
+import { logger } from './logger';
+import { prisma } from './db/client';
+import { startTaskWorker, stopTaskWorker } from './jobs/taskWorker';
+import { closeQueue } from './jobs/queue';
+import { DockerManager } from './sandbox/dockerManager';
+import { SocketServer } from './websocket/socketServer';
+
+const app = createApp();
+const server = http.createServer(app);
+
+// Initialize WebSocket server
+SocketServer.init(server);
+
+// Start background task worker
+startTaskWorker();
+
+server.listen(config.port, process.env.HOST || '0.0.0.0', () => {
+  logger.info(`🚀 Coding Harness Backend listening on port ${config.port}`);
+  logger.info(`🌐 Environment: ${config.nodeEnv}`);
+  logger.info(`🩺 Health check available at: http://localhost:${config.port}/health`);
+});
+
+// Graceful shutdown handler
+async function handleShutdown(signal: string) {
+  logger.info(`Received ${signal}. Initiating graceful shutdown...`);
+
+  server.close(async () => {
+    logger.info('HTTP server closed.');
+
+    try {
+      await SocketServer.close();
+      await stopTaskWorker();
+      await closeQueue();
+      await DockerManager.cleanupAllManagedContainers();
+      await prisma.$disconnect();
+      logger.info(
+        'WebSockets, background worker, queue, sandbox containers, and database disconnected.',
+      );
+    } catch (err) {
+      logger.error('Error during shutdown cleanup:', err);
+    }
+
+    process.exit(0);
+  });
+
+  // Force exit if shutdown hangs beyond 10 seconds
+  setTimeout(() => {
+    logger.error('Graceful shutdown timed out. Forcing termination.');
+    process.exit(1);
+  }, 10000);
+}
+
+process.on('SIGINT', () => handleShutdown('SIGINT'));
+process.on('SIGTERM', () => handleShutdown('SIGTERM'));
+
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled Rejection detected:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught Exception thrown:', error);
+  process.exit(1);
+});

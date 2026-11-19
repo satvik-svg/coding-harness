@@ -32,6 +32,7 @@ export default function TaskExecutionView() {
   const { toast, notifyBrowser } = useToast();
 
   const [task, setTask] = useState<TaskWithSessions | null>(null);
+  const [selectedSessionIndex, setSelectedSessionIndex] = useState<number>(0);
   const [logs, setLogs] = useState<string>('');
   const [status, setStatus] = useState<TaskStatus>(TaskStatus.PENDING);
   const [diff, setDiff] = useState<string>('');
@@ -54,6 +55,23 @@ export default function TaskExecutionView() {
   const [editedBranch, setEditedBranch] = useState('');
 
   const prevStatusRef = useRef<TaskStatus | null>(null);
+  const selectedSessionIndexRef = useRef<number>(0);
+
+  useEffect(() => {
+    selectedSessionIndexRef.current = selectedSessionIndex;
+  }, [selectedSessionIndex]);
+
+  const applySessionToView = useCallback(
+    (data: TaskWithSessions, sessionIdx: number) => {
+      const target = data.sessions?.[sessionIdx] || data.sessions?.[0];
+      setSummary(target?.resultSummary || '');
+      setStartedAt(target?.startedAt || data.createdAt);
+      setFinishedAt(target?.finishedAt || null);
+      setLogs(target?.logs || '');
+      setDiff(target?.resultDiff || '');
+    },
+    [],
+  );
 
   const fetchTaskDetails = useCallback(async () => {
     if (!taskId) return;
@@ -63,20 +81,24 @@ export default function TaskExecutionView() {
       setStatus(data.status);
       setEditedPrompt(data.prompt);
 
-      const latestSession = data.sessions && data.sessions[0];
-      setSummary(latestSession?.resultSummary || '');
-      setStartedAt(latestSession?.startedAt || data.createdAt);
-      setFinishedAt(latestSession?.finishedAt || null);
-      if (latestSession) {
-        if (latestSession.logs) setLogs(latestSession.logs);
-        if (latestSession.resultDiff) setDiff(latestSession.resultDiff);
-      }
+      const safeIdx =
+        selectedSessionIndexRef.current < (data.sessions?.length || 0)
+          ? selectedSessionIndexRef.current
+          : 0;
+      applySessionToView(data, safeIdx);
     } catch (err: any) {
       setErrorMessage(err.message || 'Failed to load task details');
     } finally {
       setIsLoading(false);
     }
-  }, [taskId]);
+  }, [taskId, applySessionToView]);
+
+  const handleSelectSession = (index: number) => {
+    setSelectedSessionIndex(index);
+    if (task) {
+      applySessionToView(task, index);
+    }
+  };
 
   useEffect(() => {
     if (authLoading) return;
@@ -87,6 +109,7 @@ export default function TaskExecutionView() {
     }
     if (taskId) {
       setIsLoading(true);
+      setSelectedSessionIndex(0);
       setErrorMessage(null);
       setLogs('');
       setDiff('');
@@ -104,7 +127,9 @@ export default function TaskExecutionView() {
 
     const unsubscribe = subscribeToTask(taskId, {
       onLog: (newLog) => {
-        setLogs((prev) => (prev ? `${prev}${newLog}\n` : `${newLog}\n`));
+        if (selectedSessionIndexRef.current === 0) {
+          setLogs((prev) => (prev ? `${prev}${newLog}\n` : `${newLog}\n`));
+        }
       },
       onStatus: (newStatus) => {
         const previous = prevStatusRef.current;
@@ -384,13 +409,45 @@ export default function TaskExecutionView() {
         </div>
       </div>
 
+      {/* Attempt / Session History Switcher (shown when a task had retries/multiple sessions) */}
+      {task?.sessions && task.sessions.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2 px-3.5 py-2.5 rounded-xl bg-[#0f1014] border border-white/[0.07]">
+          <span className="text-[11px] font-medium uppercase tracking-wider text-zinc-500 mr-1">
+            Run attempts ({task.sessions.length})
+          </span>
+          {task.sessions.map((s, idx) => {
+            const attemptNum = task.sessions.length - idx;
+            const lineCount = s.logs
+              ? s.logs.split('\n').filter((l) => l.trim().length > 0).length
+              : 0;
+            const active = selectedSessionIndex === idx;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => handleSelectSession(idx)}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                  active
+                    ? 'bg-brand-600/20 text-brand-300 border border-brand-500/35'
+                    : 'bg-[#09090b] text-zinc-400 hover:text-zinc-200 border border-white/[0.07]'
+                }`}
+              >
+                <span>Attempt {attemptNum}</span>
+                {idx === 0 && <span className="text-[10px] text-zinc-500">latest</span>}
+                <span className="font-mono text-[10px] text-zinc-500">· {lineCount} lines</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Primary Split Workspace: Inspector (Timeline/Console) + State & Thread */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
         <div className="lg:col-span-7 h-[640px]">
           <ExecutionInspector
             logs={logs}
-            steps={steps}
-            isRunning={status === TaskStatus.RUNNING}
+            steps={selectedSessionIndex === 0 ? steps : []}
+            isRunning={selectedSessionIndex === 0 && status === TaskStatus.RUNNING}
           />
         </div>
 

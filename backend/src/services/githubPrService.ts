@@ -157,7 +157,17 @@ export class GitHubPrService {
       await runGit(['commit', '-m', prTitle], repoDir);
 
       // 5. Push new branch to origin
-      await runGit(['push', '-u', 'origin', branchName], repoDir);
+      try {
+        await runGit(['push', '-u', 'origin', branchName], repoDir);
+      } catch (pushErr) {
+        const pushMsg = (pushErr as Error).message || '';
+        if (pushMsg.includes('[rejected]') || pushMsg.includes('non-fast-forward')) {
+          throw new Error(
+            `Branch "${branchName}" already exists on GitHub. Choose a new branch name or check your open Pull Requests.`,
+          );
+        }
+        throw pushErr;
+      }
 
       // 6. Create Pull Request via GitHub REST API
       const prRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls`, {

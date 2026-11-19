@@ -320,6 +320,7 @@ export function DiffViewer({ diff, taskId, status, repoUrl, prompt }: DiffViewer
       });
 
       setPrResult(result);
+      setPrModalOpen(false);
       toast(`Pull Request #${result.prNumber} opened`, {
         description: `Pushed branch ${result.branchName}`,
         variant: 'success',
@@ -445,19 +446,31 @@ export function DiffViewer({ diff, taskId, status, repoUrl, prompt }: DiffViewer
               <span>.patch</span>
             </button>
 
-            {isGitHubRepo && (
-              <button
-                type="button"
-                onClick={() => {
-                  setPrError(null);
-                  setPrModalOpen(true);
-                }}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-brand-600 hover:bg-brand-500 text-white font-medium text-xs transition-colors"
-              >
-                <GitPullRequest className="w-3 h-3" />
-                <span>Open PR</span>
-              </button>
-            )}
+            {isGitHubRepo &&
+              (prResult ? (
+                <a
+                  href={prResult.prUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs transition-colors"
+                >
+                  <GitPullRequest className="w-3 h-3" />
+                  <span>PR #{prResult.prNumber}</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPrError(null);
+                    setPrModalOpen(true);
+                  }}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-brand-600 hover:bg-brand-500 text-white font-medium text-xs transition-colors"
+                >
+                  <GitPullRequest className="w-3 h-3" />
+                  <span>Open PR</span>
+                </button>
+              ))}
           </div>
         </div>
 

@@ -5,47 +5,54 @@ import { AnalyticsBar } from '../components/AnalyticsBar';
 import { ApiService } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { Task, TaskAnalytics, TaskStatus } from '@coding-harness/shared';
-import { GitBranch, ChevronRight, RefreshCw, Loader2 } from 'lucide-react';
+import { GitBranch, ChevronRight, RefreshCw, Loader2, Lock } from 'lucide-react';
 
 type FilterTab = 'ALL' | TaskStatus;
 
 export default function Dashboard() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, loading: authLoading, openAuthModal } = useAuth();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [analytics, setAnalytics] = useState<TaskAnalytics | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState<FilterTab>('ALL');
-  const [userOnly, setUserOnly] = useState(false);
-
-  useEffect(() => {
-    if (!isAuthenticated) {
-      setUserOnly(false);
-    }
-  }, [isAuthenticated]);
 
   const loadData = useCallback(async () => {
+    if (!isAuthenticated) {
+      setTasks([]);
+      setAnalytics(null);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
     try {
       const [tasksRes, analyticsRes] = await Promise.allSettled([
-        ApiService.listTasks(25, 0, { userOnly: isAuthenticated && userOnly }),
-        ApiService.getTaskAnalytics(isAuthenticated && userOnly),
+        ApiService.listTasks(25, 0),
+        ApiService.getTaskAnalytics(),
       ]);
 
       if (tasksRes.status === 'fulfilled') {
         setTasks(tasksRes.value.tasks);
+      } else {
+        setTasks([]);
       }
       if (analyticsRes.status === 'fulfilled') {
         setAnalytics(analyticsRes.value);
+      } else {
+        setAnalytics(null);
       }
     } finally {
       setLoading(false);
     }
-  }, [isAuthenticated, userOnly]);
+  }, [isAuthenticated]);
 
   useEffect(() => {
+    if (authLoading) return;
     loadData();
+    if (!isAuthenticated) return;
     const interval = setInterval(loadData, 8000);
     return () => clearInterval(interval);
-  }, [loadData]);
+  }, [authLoading, isAuthenticated, loadData]);
 
   const filteredTasks = useMemo(() => {
     if (filter === 'ALL') return tasks;
@@ -109,83 +116,94 @@ export default function Dashboard() {
         <TaskForm />
       </section>
 
-      {/* Workspace Analytics KPI Cards */}
-      <AnalyticsBar analytics={analytics} />
+      {/* Private Workspace Analytics KPI Cards (only when signed in with runs) */}
+      {isAuthenticated && <AnalyticsBar analytics={analytics} />}
 
-      {/* Recent Tasks List */}
+      {/* Private Recent Tasks List */}
       <section className="space-y-3 animate-enter" style={{ animationDelay: '60ms' }}>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
             <h2 className="text-xs font-medium uppercase tracking-wider text-zinc-500">
-              Recent tasks
+              Your tasks
             </h2>
-            <span className="text-[11px] font-mono text-zinc-500 bg-white/[0.04] border border-white/[0.06] px-1.5 py-0.5 rounded">
-              {filteredTasks.length}
-            </span>
-
             {isAuthenticated && (
-              <div className="inline-flex p-0.5 rounded-lg bg-[#0f1014] border border-white/[0.07]">
-                <button
-                  type="button"
-                  onClick={() => setUserOnly(false)}
-                  className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors ${
-                    !userOnly ? 'bg-[#1c1f29] text-zinc-200' : 'text-zinc-500 hover:text-zinc-300'
-                  }`}
-                >
-                  All
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setUserOnly(true)}
-                  className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors ${
-                    userOnly ? 'bg-[#1c1f29] text-zinc-200' : 'text-zinc-500 hover:text-zinc-300'
-                  }`}
-                >
-                  Mine
-                </button>
-              </div>
+              <span className="text-[11px] font-mono text-zinc-500 bg-white/[0.04] border border-white/[0.06] px-1.5 py-0.5 rounded">
+                {filteredTasks.length}
+              </span>
             )}
           </div>
 
-          <div className="flex items-center gap-2">
-            <div className="inline-flex p-0.5 rounded-lg bg-[#0f1014] border border-white/[0.07]">
-              {(
-                [
-                  { key: 'ALL', label: 'All' },
-                  { key: TaskStatus.RUNNING, label: 'Running' },
-                  { key: TaskStatus.COMPLETED, label: 'Done' },
-                  { key: TaskStatus.FAILED, label: 'Failed' },
-                  { key: TaskStatus.CANCELLED, label: 'Stopped' },
-                ] as const
-              ).map((tab) => (
-                <button
-                  key={tab.key}
-                  type="button"
-                  onClick={() => setFilter(tab.key)}
-                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-                    filter === tab.key
-                      ? 'bg-brand-600/20 text-brand-300'
-                      : 'text-zinc-500 hover:text-zinc-300'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
+          {isAuthenticated && (
+            <div className="flex items-center gap-2">
+              <div className="inline-flex p-0.5 rounded-lg bg-[#0f1014] border border-white/[0.07]">
+                {(
+                  [
+                    { key: 'ALL', label: 'All' },
+                    { key: TaskStatus.RUNNING, label: 'Running' },
+                    { key: TaskStatus.COMPLETED, label: 'Done' },
+                    { key: TaskStatus.FAILED, label: 'Failed' },
+                    { key: TaskStatus.CANCELLED, label: 'Stopped' },
+                  ] as const
+                ).map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setFilter(tab.key)}
+                    className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                      filter === tab.key
+                        ? 'bg-brand-600/20 text-brand-300'
+                        : 'text-zinc-500 hover:text-zinc-300'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
 
-            <button
-              type="button"
-              onClick={loadData}
-              className="p-1.5 rounded-lg border border-white/[0.07] bg-[#0f1014] text-zinc-400 hover:text-zinc-200 hover:border-white/[0.15] transition-colors"
-              title="Refresh tasks"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-            </button>
-          </div>
+              <button
+                type="button"
+                onClick={loadData}
+                className="p-1.5 rounded-lg border border-white/[0.07] bg-[#0f1014] text-zinc-400 hover:text-zinc-200 hover:border-white/[0.15] transition-colors"
+                title="Refresh tasks"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="panel rounded-xl overflow-hidden divide-y divide-white/[0.06]">
-          {filteredTasks.length > 0 ? (
+          {!authLoading && !isAuthenticated ? (
+            <div className="px-6 py-12 text-center space-y-3">
+              <div className="w-9 h-9 rounded-lg bg-white/[0.04] border border-white/[0.08] flex items-center justify-center mx-auto">
+                <Lock className="w-4 h-4 text-brand-400" />
+              </div>
+              <div>
+                <p className="text-xs font-medium text-zinc-200">
+                  Sign in to access your private workspace
+                </p>
+                <p className="text-xs text-zinc-500 mt-1 max-w-sm mx-auto">
+                  Each account has an isolated task history, live sessions, and analytics.
+                </p>
+              </div>
+              <div className="flex items-center justify-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => openAuthModal('login')}
+                  className="px-3.5 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-medium transition-colors"
+                >
+                  Sign in
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openAuthModal('register')}
+                  className="px-3.5 py-1.5 rounded-lg border border-white/[0.1] bg-[#09090b] hover:border-white/[0.2] text-zinc-300 hover:text-white text-xs font-medium transition-colors"
+                >
+                  Create account
+                </button>
+              </div>
+            </div>
+          ) : filteredTasks.length > 0 ? (
             filteredTasks.map((task) => (
               <Link
                 key={task.id}
@@ -215,7 +233,7 @@ export default function Dashboard() {
           ) : (
             <div className="px-4 py-12 text-center">
               <p className="text-xs font-medium text-zinc-400">
-                {filter === 'ALL' ? 'No tasks yet' : `No ${filter.toLowerCase()} tasks`}
+                {filter === 'ALL' ? 'No tasks in your workspace yet' : `No ${filter.toLowerCase()} tasks`}
               </p>
               <p className="text-xs text-zinc-600 mt-1">
                 {filter === 'ALL'

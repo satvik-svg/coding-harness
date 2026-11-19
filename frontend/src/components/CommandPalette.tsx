@@ -58,11 +58,15 @@ export function CommandPalette() {
     };
   }, []);
 
-  // Fetch recent tasks whenever palette opens
+  // Fetch recent tasks whenever palette opens (only when authenticated)
   useEffect(() => {
     if (!open) {
       setQuery('');
       setSelectedIndex(0);
+      return;
+    }
+    if (!user) {
+      setTasks([]);
       return;
     }
     let active = true;
@@ -70,11 +74,13 @@ export function CommandPalette() {
       .then((res) => {
         if (active) setTasks(res.tasks);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (active) setTasks([]);
+      });
     return () => {
       active = false;
     };
-  }, [open]);
+  }, [open, user]);
 
   const statusIcon = (status: TaskStatus) => {
     switch (status) {

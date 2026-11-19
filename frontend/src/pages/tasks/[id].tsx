@@ -20,6 +20,7 @@ import { ExecutionInspector } from '../../components/ExecutionInspector';
 import { AgentStateCard } from '../../components/AgentStateCard';
 import { DiffViewer } from '../../components/DiffViewer';
 import { TaskResult } from '../../components/TaskResult';
+import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { TaskWithSessions, TaskStatus, AgentStepLog } from '@coding-harness/shared';
 
@@ -27,6 +28,7 @@ export default function TaskExecutionView() {
   const router = useRouter();
   const { id } = router.query;
   const taskId = typeof id === 'string' ? id : '';
+  const { isAuthenticated, loading: authLoading, openAuthModal } = useAuth();
   const { toast, notifyBrowser } = useToast();
 
   const [task, setTask] = useState<TaskWithSessions | null>(null);
@@ -77,8 +79,15 @@ export default function TaskExecutionView() {
   }, [taskId]);
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!isAuthenticated) {
+      setIsLoading(false);
+      setTask(null);
+      return;
+    }
     if (taskId) {
       setIsLoading(true);
+      setErrorMessage(null);
       setLogs('');
       setDiff('');
       setSummary('');
@@ -87,11 +96,11 @@ export default function TaskExecutionView() {
       prevStatusRef.current = null;
       fetchTaskDetails();
     }
-  }, [taskId, fetchTaskDetails]);
+  }, [taskId, authLoading, isAuthenticated, fetchTaskDetails]);
 
   // Real-time WebSocket subscription
   useEffect(() => {
-    if (!taskId) return;
+    if (!taskId || !isAuthenticated) return;
 
     const unsubscribe = subscribeToTask(taskId, {
       onLog: (newLog) => {
@@ -217,12 +226,40 @@ export default function TaskExecutionView() {
     task?.repoUrl && (task.repoUrl.startsWith('http://') || task.repoUrl.startsWith('https://')),
   );
 
-  if (isLoading) {
+  if (authLoading || isLoading) {
     return (
       <div className="min-h-[70vh] flex items-center justify-center">
         <div className="flex items-center gap-2.5 text-sm text-zinc-400">
           <RefreshCw className="w-4 h-4 text-brand-400 animate-spin" />
           <span>Loading session…</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="max-w-md mx-auto px-4 py-20 text-center space-y-3 animate-enter">
+        <AlertCircle className="w-8 h-8 text-brand-400 mx-auto" />
+        <h2 className="text-base font-semibold text-zinc-100">Sign in required</h2>
+        <p className="text-xs text-zinc-500">
+          Sessions are private to the account that created them. Sign in to view this task.
+        </p>
+        <div className="flex items-center justify-center gap-2 pt-1">
+          <button
+            type="button"
+            onClick={() => openAuthModal('login')}
+            className="px-3.5 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-xs font-medium text-white transition-colors"
+          >
+            Sign in
+          </button>
+          <Link
+            href="/"
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#111216] hover:bg-[#191b22] border border-white/[0.08] text-xs text-zinc-200 transition-colors"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span>Dashboard</span>
+          </Link>
         </div>
       </div>
     );

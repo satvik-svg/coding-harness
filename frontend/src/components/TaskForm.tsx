@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { ApiService } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
 
 const QUICK_PROMPTS = [
   {
@@ -36,7 +37,8 @@ const QUICK_PROMPTS = [
 
 export function TaskForm() {
   const router = useRouter();
-  const { github, githubRepos } = useAuth();
+  const { isAuthenticated, openAuthModal, github, githubRepos } = useAuth();
+  const { toast } = useToast();
   const [sourceType, setSourceType] = useState<'url' | 'zip'>('url');
   const [repoUrl, setRepoUrl] = useState('');
   const [branch, setBranch] = useState('');
@@ -50,6 +52,15 @@ export function TaskForm() {
 
   const submitTask = async () => {
     setErrorMessage(null);
+
+    if (!isAuthenticated) {
+      toast('Sign in required', {
+        description: 'Sign in or create an account to run private coding tasks.',
+        variant: 'info',
+      });
+      openAuthModal('login');
+      return;
+    }
 
     if (!prompt.trim()) {
       setErrorMessage('Enter instructions for what you want the agent to do.');

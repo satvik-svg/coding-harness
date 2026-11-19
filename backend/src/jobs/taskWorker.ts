@@ -1,6 +1,7 @@
 import { Worker, Job } from 'bullmq';
 import { TaskJobData, TaskStatus } from '@coding-harness/shared';
 import { TASK_QUEUE_NAME, redisConnectionOptions } from './queue';
+import { registerActiveTask, unregisterActiveTask, isTaskCancelled } from './taskRegistry';
 import { prisma } from '../db/client';
 import { GitService } from '../services/gitService';
 import { StorageService } from '../services/storageService';
@@ -14,13 +15,23 @@ import { SocketServer } from '../websocket/socketServer';
 
 /**
  * Executes a single coding task job.
- * Manages task workspace setup, repo cloning/extraction, and database status transitions.
+ * Manages task workspace setup, repo cloning/extraction, cancellation, and database status transitions.
  */
 export async function processTaskJob(job: Job<TaskJobData>): Promise<void> {
   const { taskId, repoUrl, prompt, branch, zipFilePath } = job.data;
   const startTime = new Date();
 
   logger.info(`Processing task job ${job.id} for task ${taskId}`);
+
+  // Check if task was cancelled before worker picked it up
+  const currentTask = await prisma.task.findUnique({ where: { id: taskId } });
+  if (!currentTask || currentTask.status === TaskStatus.CANCELLED || isTaskCancelled(taskId)) {
+    logger.info(`Skipping task ${taskId} because it was already cancelled.`);
+    unregisterActiveTask(taskId);
+    return;
+  }
+
+  const activeHandle = registerActiveTask(taskId);
 
   // 1. Update Task status to RUNNING in database and notify WebSocket clients
   await prisma.task.update({
@@ -75,9 +86,13 @@ export async function processTaskJob(job: Job<TaskJobData>): Promise<void> {
       throw new Error('Neither a repoUrl nor a zipFilePath was provided for this task.');
     }
 
+    if (activeHandle.signal.aborted || isTaskCancelled(taskId)) {
+      throw new Error('TASK_CANCELLED');
+    }
+
     const baseCommit = await GitService.getHeadCommit(workspacePath);
 
-    // 5. Docker Sandbox Container lifecycle (Phase 3 Tool Execution Layer)
+    // 5. Docker Sandbox Container lifecycle
     let containerInfo: { containerId: string } | null = null;
     try {
       if (config.aiProvider === 'claude-code') {
@@ -89,6 +104,7 @@ export async function processTaskJob(job: Job<TaskJobData>): Promise<void> {
             `Docker daemon connected (v${dockerStatus.version || 'unknown'}). Spinning up isolated sandbox container...`,
           );
           containerInfo = await DockerManager.createAndStartContainer(taskId, workspacePath);
+          activeHandle.setContainerId(containerInfo.containerId);
           await appendLogs(
             `Docker sandbox container initialized: ${containerInfo.containerId.substring(0, 12)}`,
           );
@@ -99,7 +115,11 @@ export async function processTaskJob(job: Job<TaskJobData>): Promise<void> {
         }
       }
 
-      // 6. AI Agent Autonomous Execution Loop (Phase 4)
+      if (activeHandle.signal.aborted || isTaskCancelled(taskId)) {
+        throw new Error('TASK_CANCELLED');
+      }
+
+      // 6. AI Agent Autonomous Execution Loop
       await appendLogs('Starting autonomous AI Agent reasoning and tool execution loop...');
       const agentResult =
         config.aiProvider === 'claude-code'
@@ -107,12 +127,14 @@ export async function processTaskJob(job: Job<TaskJobData>): Promise<void> {
               workspacePath,
               prompt,
               onProgress: appendLogs,
+              signal: activeHandle.signal,
             })
           : await AgentLoop.run({
               taskId,
               workspacePath,
               prompt,
               containerId: containerInfo?.containerId,
+              signal: activeHandle.signal,
               onProgress: async (logLine, stepLog) => {
                 await appendLogs(logLine);
                 if (stepLog) {
@@ -120,6 +142,10 @@ export async function processTaskJob(job: Job<TaskJobData>): Promise<void> {
                 }
               },
             });
+
+      if (agentResult.cancelled || activeHandle.signal.aborted || isTaskCancelled(taskId)) {
+        throw new Error('TASK_CANCELLED');
+      }
 
       if (!agentResult.success && agentResult.error) {
         throw new Error(`AI Agent execution halted with error: ${agentResult.error}`);
@@ -154,17 +180,34 @@ export async function processTaskJob(job: Job<TaskJobData>): Promise<void> {
 
       logger.info(`Task ${taskId} completed successfully`);
     } finally {
-      // Ensure sandbox container is cleanly destroyed after task completion or failure
       if (containerInfo?.containerId) {
         await appendLogs(
           `Cleaning up sandbox container ${containerInfo.containerId.substring(0, 12)}...`,
         );
-        await DockerManager.stopAndRemoveContainer(containerInfo.containerId);
+        await DockerManager.stopAndRemoveContainer(containerInfo.containerId).catch(() => {});
       }
     }
   } catch (error) {
     const err = error as Error;
     const finishTime = new Date();
+
+    if (err.message === 'TASK_CANCELLED' || activeHandle.signal.aborted || isTaskCancelled(taskId)) {
+      await appendLogs('Task execution cancelled by user.');
+
+      await prisma.session.update({
+        where: { id: session.id },
+        data: { finishedAt: finishTime },
+      });
+
+      await prisma.task.update({
+        where: { id: taskId },
+        data: { status: TaskStatus.CANCELLED },
+      });
+      SocketServer.emitTaskStatus(taskId, TaskStatus.CANCELLED);
+      logger.info(`Task ${taskId} cancelled by user`);
+      return;
+    }
+
     await appendLogs(`Task execution failed: ${err.message}`);
 
     await prisma.session.update({
@@ -182,6 +225,8 @@ export async function processTaskJob(job: Job<TaskJobData>): Promise<void> {
 
     logger.error(`Task ${taskId} failed:`, err);
     throw error;
+  } finally {
+    unregisterActiveTask(taskId);
   }
 }
 

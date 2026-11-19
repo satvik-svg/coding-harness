@@ -12,6 +12,7 @@ export enum TaskStatus {
   RUNNING = 'RUNNING',
   COMPLETED = 'COMPLETED',
   FAILED = 'FAILED',
+  CANCELLED = 'CANCELLED',
 }
 
 /**
@@ -298,4 +299,68 @@ export interface AgentLoopResult {
   finalDiff?: string;
   summary?: string;
   error?: string;
+  cancelled?: boolean;
+}
+
+/**
+ * Aggregated workspace & session analytics metrics.
+ */
+export interface TaskAnalytics {
+  totalTasks: number;
+  completedTasks: number;
+  failedTasks: number;
+  runningTasks: number;
+  pendingTasks: number;
+  cancelledTasks: number;
+  successRate: number;
+  avgDurationSeconds: number;
+  totalLinesAdded: number;
+  totalLinesRemoved: number;
+  estimatedCostUsd: number;
+}
+
+/**
+ * Payload to open a GitHub Pull Request from a completed task's diff.
+ */
+export interface CreatePullRequestInput {
+  githubToken?: string;
+  githubSession?: string;
+  branchName?: string;
+  baseBranch?: string;
+  title?: string;
+  body?: string;
+}
+
+/**
+ * Connected GitHub OAuth account metadata.
+ */
+export interface GitHubConnectionInfo {
+  connected: boolean;
+  configured: boolean;
+  login?: string;
+  name?: string | null;
+  avatarUrl?: string;
+}
+
+/**
+ * Lightweight GitHub repository summary for quick selection in the UI.
+ */
+export interface GitHubRepoSummary {
+  id: number;
+  fullName: string;
+  htmlUrl: string;
+  defaultBranch: string;
+  private: boolean;
+  updatedAt: string;
+}
+
+/**
+ * Response returned after successfully opening a GitHub Pull Request.
+ */
+export interface CreatePullRequestResult {
+  prUrl: string;
+  prNumber: number;
+  branchName: string;
+  baseBranch: string;
+  title: string;
 }

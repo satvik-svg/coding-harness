@@ -6,6 +6,20 @@ interface LiveTerminalProps {
   isRunning?: boolean;
 }
 
+// eslint-disable-next-line no-control-regex
+const ANSI_ESCAPE_REGEX = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
+
+const stripAnsi = (value: string) => value.replace(ANSI_ESCAPE_REGEX, '');
+
+const isErrorLogLine = (line: string) =>
+  line.includes('Task execution failed') ||
+  line.includes('SECURITY_VIOLATION') ||
+  line.includes('error_max_turns') ||
+  line.includes('error_max_budget_usd') ||
+  /\bExit code [1-9]\d*\b/.test(line) ||
+  /\b(ERR!|FATAL|UnhandledPromiseRejection)\b/.test(line) ||
+  /(^|\]\s+)(Error|TypeError|SyntaxError|ReferenceError|RangeError):/.test(line);
+
 export function LiveTerminal({ logs, isRunning = false }: LiveTerminalProps) {
   const [autoScroll, setAutoScroll] = useState(true);
   const [copied, setCopied] = useState(false);
@@ -24,7 +38,12 @@ export function LiveTerminal({ logs, isRunning = false }: LiveTerminalProps) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const logLines = logs ? logs.split('\n').filter((l) => l.trim().length > 0) : [];
+  const logLines = logs
+    ? logs
+        .split('\n')
+        .map(stripAnsi)
+        .filter((l) => l.trim().length > 0)
+    : [];
   const filteredLines = searchQuery
     ? logLines.filter((l) => l.toLowerCase().includes(searchQuery.toLowerCase()))
     : logLines;
@@ -32,14 +51,9 @@ export function LiveTerminal({ logs, isRunning = false }: LiveTerminalProps) {
   const renderLogLine = (line: string, index: number) => {
     let textColor = 'text-zinc-300';
 
-    if (
-      line.includes('error') ||
-      line.includes('Error') ||
-      line.includes('failed') ||
-      line.includes('SECURITY_VIOLATION')
-    ) {
+    if (isErrorLogLine(line)) {
       textColor = 'text-rose-400 bg-rose-500/10';
-    } else if (line.includes('warn') || line.includes('Warning')) {
+    } else if (/\b(npm warn|Warning:|WARN)\b/.test(line)) {
       textColor = 'text-amber-300';
     } else if (line.includes('Agent Reasoning:') || line.includes('[Agent Thought]')) {
       textColor = 'text-blue-200 font-medium';

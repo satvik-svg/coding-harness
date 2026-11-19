@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
-import { runClaudeCode } from '../src/agent/claudeCodeRunner';
+import { buildClaudeEnv, runClaudeCode } from '../src/agent/claudeCodeRunner';
 import { GitService } from '../src/services/gitService';
 import { extractLegacySummary } from '../src/agent/legacySummary';
 
@@ -86,6 +86,57 @@ async function main() {
       }),
       /exited with code 2/,
     );
+    const sanitizedEnv = buildClaudeEnv({
+      PATH: '/usr/bin',
+      HOME: '/var/lib/coding-harness',
+      NODE_ENV: 'production',
+      npm_config_production: 'true',
+      DATABASE_URL: 'postgresql://secret',
+      JWT_SECRET: 'super-secret',
+      GITHUB_CLIENT_SECRET: 'gh-secret',
+      LITELLM_MASTER_KEY: 'master-key',
+      ANTHROPIC_BASE_URL: 'http://127.0.0.1:4010',
+      ANTHROPIC_AUTH_TOKEN: 'sk-gateway',
+    });
+    assert.equal(sanitizedEnv.NODE_ENV, undefined);
+    assert.equal(sanitizedEnv.npm_config_production, undefined);
+    assert.equal(sanitizedEnv.DATABASE_URL, undefined);
+    assert.equal(sanitizedEnv.JWT_SECRET, undefined);
+    assert.equal(sanitizedEnv.GITHUB_CLIENT_SECRET, undefined);
+    assert.equal(sanitizedEnv.LITELLM_MASTER_KEY, undefined);
+    assert.equal(sanitizedEnv.ANTHROPIC_BASE_URL, 'http://127.0.0.1:4010');
+    assert.equal(sanitizedEnv.ANTHROPIC_AUTH_TOKEN, 'sk-gateway');
+    assert.equal(sanitizedEnv.PATH, '/usr/bin');
+
+    const oldNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      const envCheckScript = `console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:String(process.env.NODE_ENV ?? 'unset')}))`;
+      const envCheckResult = await runClaudeCode({
+        workspacePath: dir,
+        prompt: 'test',
+        onProgress: async () => {},
+        executable: process.execPath,
+        executableArgs: ['-e', envCheckScript, '--'],
+      });
+      assert.equal(envCheckResult.summary, 'unset');
+    } finally {
+      if (oldNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = oldNodeEnv;
+    }
+
+    const maxTurnsScript = `console.log(JSON.stringify({type:'result',subtype:'error_max_turns',is_error:true}))`;
+    await assert.rejects(
+      runClaudeCode({
+        workspacePath: dir,
+        prompt: 'test',
+        onProgress: async () => {},
+        executable: process.execPath,
+        executableArgs: ['-e', maxTurnsScript, '--'],
+      }),
+      /Reached maximum agent turns/,
+    );
+
     process.env.CLAUDE_CODE_TIMEOUT_MS = '100';
     await assert.rejects(
       runClaudeCode({

@@ -2,6 +2,50 @@ import { spawn } from 'child_process';
 import readline from 'readline';
 import { AgentLoopResult } from '@coding-harness/shared';
 
+const STRIPPED_CLAUDE_ENV_KEYS = [
+  // Prevent npm/yarn/pnpm inside target repos from skipping devDependencies (e.g. typescript, jest, eslint)
+  'NODE_ENV',
+  'npm_config_production',
+  'NPM_CONFIG_PRODUCTION',
+  // Strip backend server secrets and internal host settings from agent subprocesses
+  'DATABASE_URL',
+  'JWT_SECRET',
+  'JWT_EXPIRES_IN',
+  'GITHUB_CLIENT_ID',
+  'GITHUB_CLIENT_SECRET',
+  'GITHUB_CALLBACK_URL',
+  'LITELLM_MASTER_KEY',
+  'REDIS_HOST',
+  'REDIS_PORT',
+  'REDIS_PASSWORD',
+  'OPENAI_API_KEY',
+  'AI_API_KEY',
+  'PORT',
+  'HOST',
+  'CORS_ORIGIN',
+  'WORKSPACES_DIR',
+  'UPLOADS_DIR',
+  'COST_REPORT_PROJECT',
+  'VERTEXAI_PROJECT',
+  'VERTEXAI_LOCATION',
+] as const;
+
+const HARNESS_SYSTEM_PROMPT = [
+  'You are running inside Coding Harness on an isolated local Git clone of the repository.',
+  'Work efficiently to stay within your turn budget: batch related file reads and commands instead of inspecting one file per turn.',
+  'Make fixes directly in the workspace and verify them where practical.',
+  'Do not run git push or create a Pull Request via git/gh CLI (push credentials are not present here); leave your verified changes in the repository and provide a concise summary so Coding Harness can capture the Git diff and open the PR from the UI.',
+].join(' ');
+
+/** Build a sanitized environment for the Claude Code child process. */
+export function buildClaudeEnv(sourceEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...sourceEnv };
+  for (const key of STRIPPED_CLAUDE_ENV_KEYS) {
+    delete env[key];
+  }
+  return env;
+}
+
 /** Run Claude Code in a dedicated, trusted demo workspace. */
 export async function runClaudeCode(options: {
   workspacePath: string;
@@ -16,7 +60,7 @@ export async function runClaudeCode(options: {
   }
   const model = process.env.CLAUDE_CODE_MODEL || 'gemini-3.5-flash';
   const budget = process.env.CLAUDE_CODE_MAX_BUDGET_USD || '5.00';
-  const turns = process.env.CLAUDE_CODE_MAX_TURNS || '20';
+  const turns = process.env.CLAUDE_CODE_MAX_TURNS || '50';
   const timeoutMs = Number(process.env.CLAUDE_CODE_TIMEOUT_MS || '900000');
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('Invalid Claude timeout');
 
@@ -31,6 +75,8 @@ export async function runClaudeCode(options: {
     budget,
     '--max-turns',
     turns,
+    '--append-system-prompt',
+    HARNESS_SYSTEM_PROMPT,
     '--dangerously-skip-permissions',
   ];
   const child = spawn(
@@ -38,7 +84,7 @@ export async function runClaudeCode(options: {
     [...(options.executableArgs || []), ...args],
     {
       cwd: options.workspacePath,
-      env: process.env,
+      env: buildClaudeEnv(process.env),
       shell: false,
       detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -103,7 +149,13 @@ export async function runClaudeCode(options: {
           if (finalAnswer !== lastAssistantText) log(finalAnswer);
         }
         if (event.is_error || event.subtype !== 'success') {
-          resultError = String(event.result || event.subtype || 'Claude returned an error');
+          if (event.subtype === 'error_max_turns') {
+            resultError = `Reached maximum agent turns (${turns}) before completing the task. Try narrowing the prompt or increasing CLAUDE_CODE_MAX_TURNS.`;
+          } else if (event.subtype === 'error_max_budget_usd') {
+            resultError = `Reached maximum budget limit ($${budget}) before completing the task.`;
+          } else {
+            resultError = String(event.result || event.subtype || 'Claude returned an error');
+          }
         }
       }
     } catch {

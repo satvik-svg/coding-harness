@@ -15,6 +15,7 @@ enum TaskStatus {
   RUNNING
   COMPLETED
   FAILED
+  CANCELLED
 }
 
 model User {

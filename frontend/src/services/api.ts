@@ -8,6 +8,7 @@ import {
   HealthCheckResponse,
   Task,
   TaskAnalytics,
+  TaskMode,
   TaskStatus,
   TaskWithSessions,
   User,
@@ -82,6 +83,7 @@ export interface SubmitTaskPayload {
   branch?: string;
   prompt: string;
   file?: File;
+  mode?: TaskMode;
 }
 
 export interface ProjectCost {
@@ -188,6 +190,7 @@ export class ApiService {
       formData.append('file', payload.file);
       formData.append('prompt', payload.prompt);
       if (payload.branch) formData.append('branch', payload.branch);
+      if (payload.mode) formData.append('mode', payload.mode);
 
       res = await fetch(`${API_BASE_URL}/api/tasks`, {
         method: 'POST',
@@ -202,6 +205,7 @@ export class ApiService {
           repoUrl: payload.repoUrl,
           branch: payload.branch,
           prompt: payload.prompt,
+          mode: payload.mode,
         }),
       });
     }

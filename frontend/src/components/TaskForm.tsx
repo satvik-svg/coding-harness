@@ -10,7 +10,10 @@ import {
   AlertCircle,
   ChevronDown,
   Lock,
+  Eye,
+  Code2,
 } from 'lucide-react';
+import { TaskMode } from '@coding-harness/shared';
 import { ApiService } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
@@ -40,6 +43,7 @@ export function TaskForm() {
   const { isAuthenticated, openAuthModal, github, githubRepos } = useAuth();
   const { toast } = useToast();
   const [sourceType, setSourceType] = useState<'url' | 'zip'>('url');
+  const [mode, setMode] = useState<TaskMode>('edit');
   const [repoUrl, setRepoUrl] = useState('');
   const [branch, setBranch] = useState('');
   const [prompt, setPrompt] = useState('');
@@ -85,6 +89,7 @@ export function TaskForm() {
         branch: branch.trim() || undefined,
         prompt: prompt.trim(),
         file: sourceType === 'zip' && file ? file : undefined,
+        mode,
       });
 
       router.push(`/tasks/${task.id}`);
@@ -231,7 +236,11 @@ export function TaskForm() {
           <textarea
             required
             rows={5}
-            placeholder="Describe the changes you want to make..."
+            placeholder={
+              mode === 'read'
+                ? 'Ask a question or request a read-only code review (no files modified, faster & cheaper)...'
+                : 'Describe the changes you want to make...'
+            }
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -239,21 +248,49 @@ export function TaskForm() {
           />
 
           {/* Bottom Action Bar */}
-          <div className="px-3.5 py-2.5 bg-[#0c0d11] border-t border-white/[0.06] flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2 text-[11px] text-zinc-500 min-w-0">
-              {demoMode ? (
-                <span className="truncate text-amber-400/90">
-                  Demo VM · Trusted public GitHub repos only
-                </span>
-              ) : (
-                <span className="hidden sm:inline">
-                  Press{' '}
-                  <kbd className="px-1.5 py-0.5 rounded bg-white/[0.06] border border-white/[0.08] font-mono text-[10px] text-zinc-300">
-                    ⌘↵
-                  </kbd>{' '}
-                  to run
-                </span>
-              )}
+          <div className="px-3.5 py-2.5 bg-[#0c0d11] border-t border-white/[0.06] flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              {/* Read-Only Analyze vs Edit/Write Mode Toggle */}
+              <div
+                className="inline-flex p-0.5 rounded-lg bg-[#09090b] border border-white/[0.08] flex-shrink-0"
+                role="group"
+                aria-label="Execution mode"
+              >
+                <button
+                  type="button"
+                  onClick={() => setMode('edit')}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${
+                    mode === 'edit'
+                      ? 'bg-brand-600/20 text-brand-300'
+                      : 'text-zinc-500 hover:text-zinc-300'
+                  }`}
+                  title="Edit files, run tests, and generate a Git diff"
+                >
+                  <Code2 className="w-3 h-3" />
+                  <span>Code</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMode('read')}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${
+                    mode === 'read'
+                      ? 'bg-brand-600/20 text-brand-300'
+                      : 'text-zinc-500 hover:text-zinc-300'
+                  }`}
+                  title="Read-only analysis & Q&A — no edits or shell commands, faster & lower cost"
+                >
+                  <Eye className="w-3 h-3" />
+                  <span>Read only</span>
+                </button>
+              </div>
+
+              <span className="hidden md:inline text-[11px] text-zinc-500 truncate">
+                {mode === 'read'
+                  ? 'Inspect & answer only · no edits'
+                  : demoMode
+                    ? 'Demo VM · trusted public repos only'
+                    : 'Press ⌘↵ to run'}
+              </span>
             </div>
 
             <button
@@ -268,7 +305,7 @@ export function TaskForm() {
                 </>
               ) : (
                 <>
-                  <span>Run task</span>
+                  <span>{mode === 'read' ? 'Analyze repo' : 'Run task'}</span>
                   <ArrowUp className="w-3.5 h-3.5 group-hover:-translate-y-0.5 transition-transform" />
                 </>
               )}

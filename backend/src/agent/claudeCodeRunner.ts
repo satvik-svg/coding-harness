@@ -9,7 +9,11 @@ export async function runClaudeCode(options: {
   onProgress: (message: string) => Promise<void>;
   executable?: string;
   executableArgs?: string[];
+  signal?: AbortSignal;
 }): Promise<AgentLoopResult> {
+  if (options.signal?.aborted) {
+    return { success: false, cancelled: true, iterations: 0, totalToolCalls: 0, steps: [] };
+  }
   const model = process.env.CLAUDE_CODE_MODEL || 'gemini-3.5-flash';
   const budget = process.env.CLAUDE_CODE_MAX_BUDGET_USD || '5.00';
   const turns = process.env.CLAUDE_CODE_MAX_TURNS || '20';
@@ -50,6 +54,23 @@ export async function runClaudeCode(options: {
   let lastAssistantText: string | undefined;
   let sawResult = false;
   let timedOut = false;
+  let cancelled = false;
+  const killChild = () => {
+    if (child.pid && process.platform !== 'win32') {
+      try {
+        process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        /* already exited */
+      }
+    } else {
+      child.kill('SIGKILL');
+    }
+  };
+  const onAbort = () => {
+    cancelled = true;
+    killChild();
+  };
+  options.signal?.addEventListener('abort', onAbort, { once: true });
   const log = (message: string) => {
     pending = pending.then(() => options.onProgress(message));
   };
@@ -93,13 +114,7 @@ export async function runClaudeCode(options: {
   child.stderr.on('data', (chunk: string) => log(chunk.trim()));
   const timer = setTimeout(() => {
     timedOut = true;
-    if (child.pid && process.platform !== 'win32') {
-      try {
-        process.kill(-child.pid, 'SIGKILL');
-      } catch {
-        /* already exited */
-      }
-    } else child.kill('SIGKILL');
+    killChild();
   }, timeoutMs);
   try {
     const exitCode = await new Promise<number | null>((resolve, reject) => {
@@ -107,6 +122,9 @@ export async function runClaudeCode(options: {
       child.once('close', resolve);
     });
     await pending;
+    if (cancelled || options.signal?.aborted) {
+      return { success: false, cancelled: true, iterations: 0, totalToolCalls: 0, steps: [] };
+    }
     if (timedOut) throw new Error(`Claude Code exceeded ${timeoutMs} ms`);
     if (exitCode !== 0 || resultError || !sawResult) {
       throw new Error(
@@ -116,6 +134,7 @@ export async function runClaudeCode(options: {
     return { success: true, iterations: 0, totalToolCalls: 0, steps: [], summary: finalAnswer };
   } finally {
     clearTimeout(timer);
+    options.signal?.removeEventListener('abort', onAbort);
     lines.close();
   }
 }

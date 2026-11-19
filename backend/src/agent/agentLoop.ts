@@ -20,6 +20,7 @@ export interface AgentLoopOptions {
   containerId?: string;
   llmClient?: LLMClient;
   maxIterations?: number;
+  signal?: AbortSignal;
   onProgress?: (message: string, stepLog?: AgentStepLog) => Promise<void> | void;
 }
 
@@ -77,11 +78,33 @@ export class AgentLoop {
 
     // 3. Autonomous Iteration Loop
     while (iteration < maxIterations && !isCompleted) {
+      if (options.signal?.aborted) {
+        await notify('Agent execution cancelled by user.');
+        return {
+          success: false,
+          cancelled: true,
+          iterations: iteration,
+          totalToolCalls,
+          steps,
+        };
+      }
+
       iteration++;
       await notify(`--- Starting Agent Iteration ${iteration}/${maxIterations} ---`);
 
       try {
         const response = await llm.chat(messages, tools);
+
+        if (options.signal?.aborted) {
+          await notify('Agent execution cancelled by user.');
+          return {
+            success: false,
+            cancelled: true,
+            iterations: iteration,
+            totalToolCalls,
+            steps,
+          };
+        }
 
         // Record thought / assistant explanation if provided
         if (response.content) {
@@ -130,6 +153,16 @@ export class AgentLoop {
 
         // Execute each tool call sequentially
         for (const toolCall of parsedCalls) {
+          if (options.signal?.aborted) {
+            await notify('Agent execution cancelled by user.');
+            return {
+              success: false,
+              cancelled: true,
+              iterations: iteration,
+              totalToolCalls,
+              steps,
+            };
+          }
           totalToolCalls++;
           await notify(
             `Executing tool [${toolCall.name}] with args: ${JSON.stringify(toolCall.args)}`,

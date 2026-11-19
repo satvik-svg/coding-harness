@@ -29,6 +29,10 @@ export interface AppConfig {
   aiModel: string;
   agentMaxIterations: number;
   agentTemperature: number;
+  githubClientId: string;
+  githubClientSecret: string;
+  githubCallbackUrl?: string;
+  frontendUrl?: string;
 }
 
 export const config: AppConfig = {
@@ -61,4 +65,8 @@ export const config: AppConfig = {
   aiModel: process.env.AI_MODEL || 'gpt-4o-mini',
   agentMaxIterations: parseInt(process.env.AGENT_MAX_ITERATIONS || '10', 10),
   agentTemperature: parseFloat(process.env.AGENT_TEMPERATURE || '0.2'),
+  githubClientId: process.env.GITHUB_CLIENT_ID || '',
+  githubClientSecret: process.env.GITHUB_CLIENT_SECRET || '',
+  githubCallbackUrl: process.env.GITHUB_CALLBACK_URL || undefined,
+  frontendUrl: process.env.FRONTEND_URL || undefined,
 };

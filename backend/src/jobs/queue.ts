@@ -107,6 +107,29 @@ export async function enqueueTask(data: TaskJobData): Promise<Job<TaskJobData>> 
 }
 
 /**
+ * Removes a pending/delayed job from BullMQ if cancelled before execution starts.
+ */
+export async function removeQueuedJob(taskId: string): Promise<boolean> {
+  try {
+    const job = await Promise.race([
+      taskQueue.getJob(taskId),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500)),
+    ]);
+    if (!job) return false;
+    const state = await job.getState();
+    if (state === 'waiting' || state === 'delayed' || state === 'prioritized') {
+      await job.remove();
+      logger.info(`Removed queued job ${taskId} from BullMQ`);
+      return true;
+    }
+    return false;
+  } catch (err) {
+    logger.warn(`Unable to remove queued job ${taskId}:`, err);
+    return false;
+  }
+}
+
+/**
  * Closes Redis connections and BullMQ queue cleanly during application shutdown.
  */
 export async function closeQueue(): Promise<void> {

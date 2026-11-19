@@ -50,8 +50,19 @@ export default function Dashboard() {
     if (authLoading) return;
     loadData();
     if (!isAuthenticated) return;
-    const interval = setInterval(loadData, 8000);
-    return () => clearInterval(interval);
+    const interval = setInterval(() => {
+      if (typeof document === 'undefined' || !document.hidden) {
+        loadData();
+      }
+    }, 15_000);
+    const onVisible = () => {
+      if (!document.hidden) loadData();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [authLoading, isAuthenticated, loadData]);
 
   const filteredTasks = useMemo(() => {

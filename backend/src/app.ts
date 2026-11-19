@@ -12,6 +12,9 @@ import { globalApiLimiter } from './middlewares/rateLimiter';
 export function createApp(): Application {
   const app = express();
 
+  // Trust first reverse proxy (Nginx) so rate limiting uses real client IP instead of 127.0.0.1
+  app.set('trust proxy', 1);
+
   // Security headers
   app.use(helmet());
 

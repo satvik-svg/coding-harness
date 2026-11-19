@@ -18,13 +18,18 @@ const createRateLimitHandler = (message: string, code: string) => {
 
 /**
  * General API rate limiter preventing volumetric abuse.
- * 300 requests per 15-minute window per IP.
+ * 1000 requests per 15-minute window per client IP.
+ * Skips lightweight read-only status checks and auth endpoints (which have their own limiter).
  */
 export const globalApiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 300,
+  max: 1000,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) =>
+    req.path === '/health' ||
+    req.path === '/project-cost' ||
+    req.path.startsWith('/auth/'),
   handler: createRateLimitHandler(
     'Too many API requests. Please slow down and try again later.',
     'RATE_LIMIT_EXCEEDED',
@@ -33,11 +38,11 @@ export const globalApiLimiter = rateLimit({
 
 /**
  * Strict authentication limiter preventing credential stuffing and brute-force attacks.
- * 15 attempts per 15-minute window per IP.
+ * 30 attempts per 15-minute window per client IP.
  */
 export const authRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 15,
+  max: 30,
   standardHeaders: true,
   legacyHeaders: false,
   handler: createRateLimitHandler(

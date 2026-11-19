@@ -53,6 +53,13 @@ export interface Session {
 }
 
 /**
+ * Execution mode for a coding task:
+ * - 'edit': full autonomous coding (reads, edits, runs verification, produces Git diff)
+ * - 'read': read-only analysis & Q&A (no file modifications or shell commands, faster & cheaper)
+ */
+export type TaskMode = 'edit' | 'read';
+
+/**
  * Payload required to submit a new coding task.
  */
 export interface CreateTaskInput {
@@ -60,6 +67,7 @@ export interface CreateTaskInput {
   prompt: string;
   branch?: string;
   userId?: string;
+  mode?: TaskMode;
 }
 
 /**
@@ -152,6 +160,7 @@ export interface TaskJobData {
   branch?: string;
   userId?: string | null;
   zipFilePath?: string;
+  mode?: TaskMode;
 }
 
 /**

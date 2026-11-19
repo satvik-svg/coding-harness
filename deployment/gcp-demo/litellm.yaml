@@ -1,4 +1,9 @@
 model_list:
+  - model_name: gemini-4-hydrogen
+    litellm_params:
+      model: vertex_ai/gemini-4-hydrogen
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: global
   - model_name: gemini-3.5-flash
     litellm_params:
       model: vertex_ai/gemini-3.5-flash

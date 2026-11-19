@@ -20,11 +20,13 @@ export class GitService {
 
   /**
    * Prepares and initializes a clean, dedicated workspace directory for a task.
+   * Removes any stale leftover files (e.g., after a BullMQ stall/retry) so git clone never collides.
    */
   static async prepareWorkspace(taskId: string): Promise<string> {
     const workspacePath = this.getWorkspacePath(taskId);
+    await fs.rm(workspacePath, { recursive: true, force: true });
     await fs.mkdir(workspacePath, { recursive: true });
-    logger.debug(`Prepared workspace directory at ${workspacePath}`);
+    logger.debug(`Prepared clean workspace directory at ${workspacePath}`);
     return workspacePath;
   }
 

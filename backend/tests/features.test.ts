@@ -1,6 +1,9 @@
 import assert from 'assert';
+import fs from 'fs/promises';
+import path from 'path';
 import http from 'http';
 import { createApp } from '../src/app';
+import { GitService } from '../src/services/gitService';
 import {
   registerActiveTask,
   cancelActiveTask,
@@ -188,6 +191,20 @@ async function testPrivateTaskRoutesRequireAuth() {
   }
 }
 
+async function testPrepareWorkspaceCleansStaleFiles() {
+  const taskId = `stale-workspace-${Date.now()}`;
+  const wsPath = await GitService.prepareWorkspace(taskId);
+  try {
+    await fs.writeFile(path.join(wsPath, 'leftover.txt'), 'from crashed run', 'utf8');
+    // Re-preparing the same workspace (e.g. BullMQ stalled job retry) must wipe stale files
+    await GitService.prepareWorkspace(taskId);
+    const entries = await fs.readdir(wsPath);
+    assert.strictEqual(entries.length, 0, 'prepareWorkspace must leave a completely empty directory');
+  } finally {
+    await GitService.cleanupWorkspace(taskId);
+  }
+}
+
 async function run() {
   await testTaskRegistryAndCancellation();
   await testClaudeCodeAbortSignal();
@@ -195,7 +212,8 @@ async function run() {
   testTaskRoutesRegistered();
   testGitHubOAuthServiceAndRoutes();
   await testPrivateTaskRoutesRequireAuth();
-  console.log('All new feature + GitHub OAuth + private workspace backend tests passed.');
+  await testPrepareWorkspaceCleansStaleFiles();
+  console.log('All new feature + GitHub OAuth + private workspace + clean workspace tests passed.');
   process.exit(0);
 }
 

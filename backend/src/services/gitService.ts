@@ -45,7 +45,8 @@ export class GitService {
 
   /**
    * Clones a remote Git repository into the target workspace directory.
-   * Supports branch selection and OAuth/access token injection for private repositories.
+   * For GitHub HTTPS repositories with a token, passes a transient HTTP extraheader
+   * so credentials are never written to .git/config inside the workspace.
    */
   static async cloneRepository(
     repoUrl: string,
@@ -54,12 +55,20 @@ export class GitService {
   ): Promise<SimpleGit> {
     logger.info(`Cloning repository ${repoUrl} to ${targetDir}`);
 
+    const token = options.token?.trim();
+    const isGitHubHttps = repoUrl.startsWith('https://github.com/');
     let cloneUrl = repoUrl;
+    const gitConfigFlags: string[] = [];
+    let authHeader: string | undefined;
 
-    // Inject token for private GitHub/GitLab repositories if provided
-    if (options.token && repoUrl.startsWith('https://')) {
-      const urlWithoutScheme = repoUrl.replace('https://', '');
-      cloneUrl = `https://${encodeURIComponent(options.token)}@${urlWithoutScheme}`;
+    if (token && repoUrl.startsWith('https://')) {
+      if (isGitHubHttps) {
+        authHeader = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`;
+        gitConfigFlags.push(`http.https://github.com/.extraheader=${authHeader}`);
+      } else {
+        const urlWithoutScheme = repoUrl.replace('https://', '');
+        cloneUrl = `https://${encodeURIComponent(token)}@${urlWithoutScheme}`;
+      }
     }
 
     const cloneParams: string[] = [];
@@ -70,8 +79,30 @@ export class GitService {
       cloneParams.push('--depth', options.depth.toString());
     }
 
-    const git = simpleGit();
-    await git.clone(cloneUrl, targetDir, cloneParams);
+    const git = simpleGit({
+      config: gitConfigFlags,
+    }).env({
+      ...process.env,
+      GIT_TERMINAL_PROMPT: '0',
+    });
+
+    try {
+      await git.clone(cloneUrl, targetDir, cloneParams);
+    } catch (err) {
+      const e = err as Error;
+      let msg = e.message || 'Failed to clone repository';
+      if (token) {
+        msg = msg
+          .split(token)
+          .join('[REDACTED]')
+          .split(encodeURIComponent(token))
+          .join('[REDACTED]');
+      }
+      if (authHeader) {
+        msg = msg.split(authHeader).join('[REDACTED]');
+      }
+      throw new Error(msg);
+    }
 
     const repoGit = simpleGit(targetDir);
     // Configure default committer for automated operations

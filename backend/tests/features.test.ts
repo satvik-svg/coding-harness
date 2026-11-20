@@ -168,6 +168,8 @@ function testGitHubOAuthServiceAndRoutes() {
   assert.ok(routes.includes('/github/start'), 'GET /github/start must be mounted');
   assert.ok(routes.includes('/github/callback'), 'GET /github/callback must be mounted');
   assert.ok(routes.includes('/github/repos'), 'GET /github/repos must be mounted');
+  assert.ok(routes.includes('/github/link'), 'POST /github/link must be mounted');
+  assert.ok(routes.includes('/github/disconnect'), 'DELETE /github/disconnect must be mounted');
 }
 
 async function testPrivateTaskRoutesRequireAuth() {
@@ -190,6 +192,22 @@ async function testPrivateTaskRoutesRequireAuth() {
       body: JSON.stringify({ repoUrl: 'https://github.com/octocat/Hello-World', prompt: 'test' }),
     });
     assert.strictEqual(createRes.status, 401, 'POST /api/tasks must require auth (401)');
+
+    const linkRes = await fetch(`${base}/api/auth/github/link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ githubSession: 'dummy' }),
+    });
+    assert.strictEqual(linkRes.status, 401, 'POST /api/auth/github/link must require auth (401)');
+
+    const disconnectRes = await fetch(`${base}/api/auth/github/disconnect`, {
+      method: 'DELETE',
+    });
+    assert.strictEqual(
+      disconnectRes.status,
+      401,
+      'DELETE /api/auth/github/disconnect must require auth (401)',
+    );
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

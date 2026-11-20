@@ -1,7 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import { ApiResponse, GitHubConnectionInfo, GitHubRepoSummary } from '@coding-harness/shared';
 import { config } from '../config';
+import { prisma } from '../db/client';
 import { AppError } from '../middlewares/errorHandler';
+import { AuthenticatedRequest } from '../middlewares/auth';
 import {
   exchangeCodeForGitHubToken,
   fetchGitHubProfile,
@@ -20,7 +22,10 @@ function resolveCallbackUrl(req: Request): string {
   }
   const forwardedProto = (req.headers['x-forwarded-proto'] as string)?.split(',')[0]?.trim();
   const proto = forwardedProto || req.protocol || 'http';
-  const host = (req.headers['x-forwarded-host'] as string)?.split(',')[0]?.trim() || req.get('host') || `localhost:${config.port}`;
+  const host =
+    (req.headers['x-forwarded-host'] as string)?.split(',')[0]?.trim() ||
+    req.get('host') ||
+    `localhost:${config.port}`;
   return `${proto}://${host}/api/auth/github/callback`;
 }
 
@@ -29,8 +34,10 @@ function resolveFrontendOrigin(req: Request, requestedOrigin?: string): string {
     try {
       const parsed = new URL(requestedOrigin);
       if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-        // Allow localhost dev origins or same host as request
-        const reqHost = (req.headers['x-forwarded-host'] as string)?.split(',')[0]?.trim() || req.get('host') || '';
+        const reqHost =
+          (req.headers['x-forwarded-host'] as string)?.split(',')[0]?.trim() ||
+          req.get('host') ||
+          '';
         const isLocal = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
         if (isLocal || parsed.host === reqHost) {
           return parsed.origin;
@@ -45,7 +52,8 @@ function resolveFrontendOrigin(req: Request, requestedOrigin?: string): string {
   }
   const forwardedProto = (req.headers['x-forwarded-proto'] as string)?.split(',')[0]?.trim();
   const proto = forwardedProto || req.protocol || 'http';
-  const host = (req.headers['x-forwarded-host'] as string)?.split(',')[0]?.trim() || req.get('host');
+  const host =
+    (req.headers['x-forwarded-host'] as string)?.split(',')[0]?.trim() || req.get('host');
   if (host && !host.includes(':4000')) {
     return `${proto}://${host}`;
   }
@@ -59,17 +67,40 @@ function extractGitHubSessionHeader(req: Request): string {
 }
 
 /**
- * Reports whether GitHub OAuth is configured on the server and, if a sealed
- * session header is provided, returns the connected GitHub account metadata.
+ * Resolves the active sealed GitHub session token for a request:
+ * prefers the authenticated user's DB-persisted session (cross-device),
+ * falling back to the X-GitHub-Session header.
+ */
+async function resolveSealedGitHubSession(req: AuthenticatedRequest): Promise<string> {
+  const headerToken = extractGitHubSessionHeader(req);
+  if (req.user?.id) {
+    try {
+      const dbUser = await prisma.user.findUnique({
+        where: { id: req.user.id },
+        select: { githubSessionEncrypted: true },
+      });
+      if (dbUser?.githubSessionEncrypted) {
+        return dbUser.githubSessionEncrypted;
+      }
+    } catch {
+      // Fall back to header if DB is temporarily unreachable
+    }
+  }
+  return headerToken;
+}
+
+/**
+ * Reports whether GitHub OAuth is configured on the server and, if connected
+ * (either persisted on the signed-in user's account or via header), returns profile metadata.
  */
 export async function getGitHubStatus(
-  req: Request,
+  req: AuthenticatedRequest,
   res: Response,
   next: NextFunction,
 ): Promise<void> {
   try {
     const configured = isGitHubOAuthConfigured();
-    const sessionToken = extractGitHubSessionHeader(req);
+    const sessionToken = await resolveSealedGitHubSession(req);
 
     let data: GitHubConnectionInfo = { connected: false, configured };
 
@@ -91,6 +122,97 @@ export async function getGitHubStatus(
     const response: ApiResponse<GitHubConnectionInfo> = {
       success: true,
       data,
+      timestamp: new Date().toISOString(),
+    };
+
+    res.status(200).json(response);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Persists an authenticated user's sealed GitHub OAuth session in PostgreSQL
+ * so their GitHub connection carries over across all browsers and devices.
+ */
+export async function linkGitHubSession(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    if (!req.user?.id) {
+      throw new AppError('Authentication required', 401, 'UNAUTHORIZED');
+    }
+
+    const sealed =
+      (typeof req.body?.githubSession === 'string' && req.body.githubSession.trim()) ||
+      extractGitHubSessionHeader(req);
+
+    if (!sealed) {
+      throw new AppError('A valid GitHub session token is required', 400, 'INVALID_INPUT');
+    }
+
+    let payload;
+    try {
+      payload = unsealGitHubSession(sealed);
+    } catch {
+      throw new AppError('Invalid or corrupted GitHub session token', 400, 'GITHUB_INVALID_SESSION');
+    }
+
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: { githubSessionEncrypted: sealed },
+    });
+
+    logger.info(`Persisted GitHub OAuth link (@${payload.login}) for user ${req.user.id}`);
+
+    const response: ApiResponse<GitHubConnectionInfo> = {
+      success: true,
+      data: {
+        connected: true,
+        configured: isGitHubOAuthConfigured(),
+        login: payload.login,
+        name: payload.name,
+        avatarUrl: payload.avatarUrl,
+      },
+      message: `Linked GitHub account @${payload.login}`,
+      timestamp: new Date().toISOString(),
+    };
+
+    res.status(200).json(response);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Removes the persisted GitHub OAuth session from the signed-in user's account.
+ */
+export async function disconnectGitHubSession(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    if (!req.user?.id) {
+      throw new AppError('Authentication required', 401, 'UNAUTHORIZED');
+    }
+
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: { githubSessionEncrypted: null },
+    });
+
+    logger.info(`Disconnected GitHub OAuth for user ${req.user.id}`);
+
+    const response: ApiResponse<GitHubConnectionInfo> = {
+      success: true,
+      data: {
+        connected: false,
+        configured: isGitHubOAuthConfigured(),
+      },
+      message: 'GitHub account disconnected',
       timestamp: new Date().toISOString(),
     };
 
@@ -155,10 +277,7 @@ export async function handleGitHubOAuthCallback(
     }
 
     if (oauthError) {
-      res.redirect(
-        302,
-        `${targetOrigin}${returnTo}#gh_error=${encodeURIComponent(oauthError)}`,
-      );
+      res.redirect(302, `${targetOrigin}${returnTo}#gh_error=${encodeURIComponent(oauthError)}`);
       return;
     }
 
@@ -197,15 +316,15 @@ export async function handleGitHubOAuthCallback(
 }
 
 /**
- * Lists the connected user's recently updated GitHub repositories.
+ * Lists the connected user's recently updated GitHub repositories (public & private).
  */
 export async function listGitHubRepos(
-  req: Request,
+  req: AuthenticatedRequest,
   res: Response,
   next: NextFunction,
 ): Promise<void> {
   try {
-    const sessionToken = extractGitHubSessionHeader(req);
+    const sessionToken = await resolveSealedGitHubSession(req);
     if (!sessionToken) {
       throw new AppError('GitHub account is not connected', 401, 'GITHUB_NOT_CONNECTED');
     }
@@ -214,7 +333,11 @@ export async function listGitHubRepos(
     try {
       session = unsealGitHubSession(sessionToken);
     } catch {
-      throw new AppError('Invalid or expired GitHub session. Please reconnect.', 401, 'GITHUB_INVALID_SESSION');
+      throw new AppError(
+        'Invalid or expired GitHub session. Please reconnect.',
+        401,
+        'GITHUB_INVALID_SESSION',
+      );
     }
 
     const repos = await fetchGitHubRepos(session.accessToken);

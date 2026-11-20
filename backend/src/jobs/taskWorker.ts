@@ -4,6 +4,7 @@ import { TASK_QUEUE_NAME, redisConnectionOptions } from './queue';
 import { registerActiveTask, unregisterActiveTask, isTaskCancelled } from './taskRegistry';
 import { prisma } from '../db/client';
 import { GitService } from '../services/gitService';
+import { unsealGitHubSession } from '../services/githubOAuthService';
 import { StorageService } from '../services/storageService';
 import { DockerManager } from '../sandbox/dockerManager';
 import { AgentLoop } from '../agent/agentLoop';
@@ -79,10 +80,27 @@ export async function processTaskJob(job: Job<TaskJobData>): Promise<void> {
       await appendLogs('Initializing local Git tracking for diff generation...');
       await GitService.initRepository(workspacePath);
     } else if (repoUrl) {
+      let cloneToken: string | undefined;
+      const ownerId = job.data.userId || currentTask.userId;
+      if (ownerId && repoUrl.startsWith('https://github.com/')) {
+        try {
+          const owner = await prisma.user.findUnique({
+            where: { id: ownerId },
+            select: { githubSessionEncrypted: true },
+          });
+          if (owner?.githubSessionEncrypted) {
+            cloneToken = unsealGitHubSession(owner.githubSessionEncrypted).accessToken;
+            await appendLogs('Using connected GitHub account for authenticated clone.');
+          }
+        } catch {
+          // Proceed without token (public clone fallback)
+        }
+      }
+
       await appendLogs(
         `Cloning Git repository: ${repoUrl}${branch ? ` (branch: ${branch})` : ''}...`,
       );
-      await GitService.cloneRepository(repoUrl, workspacePath, { branch });
+      await GitService.cloneRepository(repoUrl, workspacePath, { branch, token: cloneToken });
       await appendLogs('Repository cloned successfully.');
     } else {
       throw new Error('Neither a repoUrl nor a zipFilePath was provided for this task.');

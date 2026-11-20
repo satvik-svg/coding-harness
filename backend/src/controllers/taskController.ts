@@ -22,7 +22,7 @@ import { extractLegacySummary } from '../agent/legacySummary';
 
 function validateDemoGitHubUrl(repoUrl: unknown): void {
   if (typeof repoUrl !== 'string') {
-    throw new AppError('This demo accepts public GitHub URLs only', 400, 'INVALID_INPUT');
+    throw new AppError('This demo accepts HTTPS GitHub repository URLs only', 400, 'INVALID_INPUT');
   }
   let url: URL;
   try {
@@ -40,7 +40,27 @@ function validateDemoGitHubUrl(repoUrl: unknown): void {
     url.hash ||
     !/^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/?$/.test(url.pathname)
   ) {
-    throw new AppError('Use a public HTTPS GitHub repository URL', 400, 'INVALID_INPUT');
+    throw new AppError('Use a valid HTTPS GitHub repository URL', 400, 'INVALID_INPUT');
+  }
+}
+
+async function syncHeaderGitHubSessionToUser(
+  req: AuthenticatedRequest,
+  userId: string,
+): Promise<void> {
+  const headerToken =
+    typeof req.headers['x-github-session'] === 'string'
+      ? req.headers['x-github-session'].trim()
+      : '';
+  if (!headerToken) return;
+  try {
+    unsealGitHubSession(headerToken);
+    await prisma.user.updateMany({
+      where: { id: userId, githubSessionEncrypted: null },
+      data: { githubSessionEncrypted: headerToken },
+    });
+  } catch {
+    // Ignore invalid header tokens
   }
 }
 
@@ -88,6 +108,9 @@ export async function createTask(
     const taskRepoIdentifier = repoUrl
       ? repoUrl.trim()
       : uploadedFile?.originalname || 'archive.zip';
+
+    // Ensure connected GitHub session is persisted so the worker can clone private repos
+    await syncHeaderGitHubSessionToUser(req, userId);
 
     // 1. Create Task record in database scoped strictly to the signed-in user
     const task = await prisma.task.create({
@@ -556,11 +579,21 @@ export async function createPullRequest(
     let resolvedToken = typeof githubToken === 'string' ? githubToken.trim() : '';
 
     if (!resolvedToken) {
-      const sealed =
+      let sealed =
         (typeof githubSession === 'string' && githubSession.trim()) ||
         (typeof req.headers['x-github-session'] === 'string'
           ? req.headers['x-github-session'].trim()
           : '');
+
+      // Fall back to the user's persisted cross-device GitHub session in PostgreSQL
+      if (!sealed) {
+        const dbUser = await prisma.user.findUnique({
+          where: { id: userId },
+          select: { githubSessionEncrypted: true },
+        });
+        sealed = dbUser?.githubSessionEncrypted || '';
+      }
+
       if (sealed) {
         try {
           resolvedToken = unsealGitHubSession(sealed).accessToken;

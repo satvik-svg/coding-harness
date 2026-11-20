@@ -19,12 +19,13 @@ enum TaskStatus {
 }
 
 model User {
-  id           String    @id @default(uuid())
-  email        String    @unique
-  passwordHash String
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  tasks        Task[]
+  id                     String    @id @default(uuid())
+  email                  String    @unique
+  passwordHash           String
+  githubSessionEncrypted String?   @db.Text
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+  tasks                  Task[]
 
   @@map("users")
 }

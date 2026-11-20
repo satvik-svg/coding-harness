@@ -3,6 +3,7 @@ import { GitHubConnectionInfo, GitHubRepoSummary, User } from '@coding-harness/s
 import {
   ApiService,
   getAuthToken,
+  getGitHubSession,
   setAuthToken,
   setGitHubSession,
 } from '../services/api';
@@ -22,7 +23,7 @@ interface AuthContextValue {
   github: GitHubConnectionInfo;
   githubRepos: GitHubRepoSummary[];
   connectGitHub: (returnTo?: string) => void;
-  disconnectGitHub: () => void;
+  disconnectGitHub: () => Promise<void>;
   refreshGitHub: () => Promise<void>;
 }
 
@@ -40,7 +41,7 @@ const AuthContext = createContext<AuthContextValue>({
   github: { connected: false, configured: false },
   githubRepos: [],
   connectGitHub: () => {},
-  disconnectGitHub: () => {},
+  disconnectGitHub: async () => {},
   refreshGitHub: async () => {},
 });
 
@@ -71,15 +72,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setGithubRepos([]);
       }
     } catch {
-      // Backend offline — keep default disconnected state
+      // Backend offline — keep default state
     }
   }, []);
 
-  // Hydrate app auth + capture GitHub OAuth hash callback
+  // Hydrate app auth + capture GitHub OAuth hash callback + persist link to user account
   useEffect(() => {
     let active = true;
 
     const hydrate = async () => {
+      let incomingGhSession: string | null = null;
+
       // 1. Check URL hash for #gh_session=... or #gh_error=...
       if (typeof window !== 'undefined' && window.location.hash) {
         const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
@@ -87,7 +90,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const ghError = hashParams.get('gh_error');
 
         if (ghSession || ghError) {
-          // Immediately remove hash from URL so it isn't kept in browser history
           window.history.replaceState(
             null,
             '',
@@ -95,9 +97,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           );
 
           if (ghSession) {
+            incomingGhSession = ghSession;
             setGitHubSession(ghSession);
             toast('GitHub connected', {
-              description: 'You can now pick repos and open Pull Requests in 1 click.',
+              description: 'Private & public repos and 1-click Pull Requests are ready.',
               variant: 'success',
             });
           } else if (ghError) {
@@ -110,18 +113,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       // 2. Hydrate JWT user session if present
+      let authenticatedUser: User | null = null;
       const token = getAuthToken();
       if (token) {
         try {
-          const profile = await ApiService.getMe();
-          if (active) setUser(profile);
+          authenticatedUser = await ApiService.getMe();
+          if (active) setUser(authenticatedUser);
         } catch {
           setAuthToken(null);
           if (active) setUser(null);
         }
       }
 
-      // 3. Hydrate GitHub OAuth status & repos
+      // 3. If user is signed in and we just received a new GitHub OAuth session (or have a local one), persist it to Postgres
+      if (authenticatedUser) {
+        const toPersist = incomingGhSession || getGitHubSession();
+        if (toPersist) {
+          try {
+            await ApiService.linkGitHubSession(toPersist);
+          } catch {
+            // Non-fatal: header still works for this browser session
+          }
+        }
+      }
+
+      // 4. Hydrate GitHub OAuth status & repos (pulls from DB automatically across devices!)
       if (active) {
         await refreshGitHub();
         setLoading(false);
@@ -143,23 +159,46 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAuthModalOpen(false);
   }, []);
 
-  const login = useCallback(async (email: string, password: string) => {
-    const res = await ApiService.login(email, password);
-    setAuthToken(res.token);
-    setUser(res.user);
-    setAuthModalOpen(false);
-  }, []);
+  const postAuthSync = useCallback(async () => {
+    const localGh = getGitHubSession();
+    if (localGh) {
+      try {
+        await ApiService.linkGitHubSession(localGh);
+      } catch {
+        // Ignore if local token is stale; DB token (if any) will load next
+      }
+    }
+    await refreshGitHub();
+  }, [refreshGitHub]);
 
-  const register = useCallback(async (email: string, password: string) => {
-    const res = await ApiService.register(email, password);
-    setAuthToken(res.token);
-    setUser(res.user);
-    setAuthModalOpen(false);
-  }, []);
+  const login = useCallback(
+    async (email: string, password: string) => {
+      const res = await ApiService.login(email, password);
+      setAuthToken(res.token);
+      setUser(res.user);
+      setAuthModalOpen(false);
+      await postAuthSync();
+    },
+    [postAuthSync],
+  );
+
+  const register = useCallback(
+    async (email: string, password: string) => {
+      const res = await ApiService.register(email, password);
+      setAuthToken(res.token);
+      setUser(res.user);
+      setAuthModalOpen(false);
+      await postAuthSync();
+    },
+    [postAuthSync],
+  );
 
   const logout = useCallback(() => {
     setAuthToken(null);
+    setGitHubSession(null);
     setUser(null);
+    setGithub((prev) => ({ connected: false, configured: prev.configured }));
+    setGithubRepos([]);
   }, []);
 
   const connectGitHub = useCallback((returnTo?: string) => {
@@ -168,7 +207,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     window.location.href = ApiService.getGitHubOAuthStartUrl(targetPath);
   }, []);
 
-  const disconnectGitHub = useCallback(() => {
+  const disconnectGitHub = useCallback(async () => {
+    try {
+      if (getAuthToken()) {
+        await ApiService.disconnectGitHub();
+      }
+    } catch {
+      // Clear local state regardless
+    }
     setGitHubSession(null);
     setGithub((prev) => ({ connected: false, configured: prev.configured }));
     setGithubRepos([]);

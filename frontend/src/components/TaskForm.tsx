@@ -288,7 +288,9 @@ export function TaskForm() {
                 {mode === 'read'
                   ? 'Inspect & answer only · no edits'
                   : demoMode
-                    ? 'Demo VM · trusted public repos only'
+                    ? github.connected
+                      ? 'Demo VM · trusted GitHub repos (public & private)'
+                      : 'Demo VM · connect GitHub for private repos'
                     : 'Press ⌘↵ to run'}
               </span>
             </div>

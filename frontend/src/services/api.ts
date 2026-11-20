@@ -125,6 +125,27 @@ export class ApiService {
     return json.data.repos;
   }
 
+  static async linkGitHubSession(githubSession: string): Promise<GitHubConnectionInfo> {
+    const res = await fetch(`${API_BASE_URL}/api/auth/github/link`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ githubSession }),
+    });
+    if (!res.ok) throw new Error('Could not persist GitHub connection to account');
+    const json: ApiResponse<GitHubConnectionInfo> = await res.json();
+    return json.data;
+  }
+
+  static async disconnectGitHub(): Promise<void> {
+    const res = await fetch(`${API_BASE_URL}/api/auth/github/disconnect`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    if (!res.ok && res.status !== 401) {
+      throw new Error('Could not disconnect GitHub account');
+    }
+  }
+
   static async getProjectCost(): Promise<ProjectCost> {
     const res = await fetch(`${API_BASE_URL}/api/project-cost`, {
       cache: 'no-store',

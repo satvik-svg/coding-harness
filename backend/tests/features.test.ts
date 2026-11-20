@@ -313,6 +313,45 @@ with zipfile.ZipFile(dest, 'w') as zf:
   }
 }
 
+async function testGitCloneWithNativeExecAndTokenRedaction() {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'ch-clone-test-'));
+  const originDir = path.join(tmp, 'origin');
+  const clonedDir = path.join(tmp, 'cloned');
+
+  try {
+    await fs.mkdir(originDir, { recursive: true });
+    await fs.writeFile(path.join(originDir, 'README.md'), '# test\n', 'utf8');
+    await GitService.initRepository(originDir);
+
+    // 1. Native git clone must succeed without simple-git environment guard errors
+    await GitService.cloneRepository(originDir, clonedDir);
+    const readme = await fs.readFile(path.join(clonedDir, 'README.md'), 'utf8');
+    assert.strictEqual(readme, '# test\n');
+
+    // 2. Cloning an invalid GitHub URL with a token must NOT trigger simple-git guard AND must redact token
+    const badCloneDir = path.join(tmp, 'bad-clone');
+    let errMsg = '';
+    try {
+      await GitService.cloneRepository('https://github.com/nonexistent-owner-xyz-123/no-repo', badCloneDir, {
+        token: 'gho_secret_clone_token_999',
+      });
+    } catch (err) {
+      errMsg = (err as Error).message;
+    }
+    assert.ok(errMsg.length > 0, 'Invalid repo clone should fail');
+    assert.ok(
+      !errMsg.includes('environment guard'),
+      `Should not hit simple-git environment guard: ${errMsg}`,
+    );
+    assert.ok(
+      !errMsg.includes('gho_secret_clone_token_999'),
+      'Clone errors must redact GitHub access token',
+    );
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+}
+
 async function run() {
   await testTaskRegistryAndCancellation();
   await testClaudeCodeAbortSignal();
@@ -323,7 +362,8 @@ async function run() {
   await testPrepareWorkspaceCleansStaleFiles();
   await testReadOnlyModeAndCostGuardrails();
   await testZipExtractAndBaselineDiff();
-  console.log('All feature, OAuth, private workspace, read-only, and zip archive tests passed.');
+  await testGitCloneWithNativeExecAndTokenRedaction();
+  console.log('All feature, OAuth, private workspace, read-only, zip, and git clone tests passed.');
   process.exit(0);
 }
 

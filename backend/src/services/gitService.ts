@@ -1,8 +1,12 @@
 import path from 'path';
 import fs from 'fs/promises';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { simpleGit, SimpleGit } from 'simple-git';
 import { config } from '../config';
 import { logger } from '../logger';
+
+const execFileAsync = promisify(execFile);
 
 export interface CloneOptions {
   branch?: string;
@@ -58,39 +62,37 @@ export class GitService {
     const token = options.token?.trim();
     const isGitHubHttps = repoUrl.startsWith('https://github.com/');
     let cloneUrl = repoUrl;
-    const gitConfigFlags: string[] = [];
+    const gitArgs: string[] = [];
     let authHeader: string | undefined;
 
     if (token && repoUrl.startsWith('https://')) {
+      gitArgs.push('-c', 'credential.helper=');
       if (isGitHubHttps) {
         authHeader = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`;
-        gitConfigFlags.push(`http.https://github.com/.extraheader=${authHeader}`);
+        gitArgs.push('-c', `http.https://github.com/.extraheader=${authHeader}`);
       } else {
         const urlWithoutScheme = repoUrl.replace('https://', '');
         cloneUrl = `https://${encodeURIComponent(token)}@${urlWithoutScheme}`;
       }
     }
 
-    const cloneParams: string[] = [];
+    gitArgs.push('clone');
     if (options.branch) {
-      cloneParams.push('--branch', options.branch);
+      gitArgs.push('--branch', options.branch);
     }
     if (options.depth) {
-      cloneParams.push('--depth', options.depth.toString());
+      gitArgs.push('--depth', options.depth.toString());
     }
-
-    const git = simpleGit({
-      config: gitConfigFlags,
-    }).env({
-      ...process.env,
-      GIT_TERMINAL_PROMPT: '0',
-    });
+    gitArgs.push(cloneUrl, targetDir);
 
     try {
-      await git.clone(cloneUrl, targetDir, cloneParams);
+      await execFileAsync('git', gitArgs, {
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+        maxBuffer: 10 * 1024 * 1024,
+      });
     } catch (err) {
-      const e = err as Error;
-      let msg = e.message || 'Failed to clone repository';
+      const e = err as Error & { stderr?: string };
+      let msg = e.stderr || e.message || 'Failed to clone repository';
       if (token) {
         msg = msg
           .split(token)
@@ -101,7 +103,7 @@ export class GitService {
       if (authHeader) {
         msg = msg.split(authHeader).join('[REDACTED]');
       }
-      throw new Error(msg);
+      throw new Error(msg.trim());
     }
 
     const repoGit = simpleGit(targetDir);

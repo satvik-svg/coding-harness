@@ -119,7 +119,13 @@ export class GitHubPrService {
         try {
           return await execFileAsync(
             'git',
-            ['-c', `http.https://github.com/.extraheader=${authHeader}`, ...args],
+            [
+              '-c',
+              'credential.helper=',
+              '-c',
+              `http.https://github.com/.extraheader=${authHeader}`,
+              ...args,
+            ],
             {
               cwd,
               env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },

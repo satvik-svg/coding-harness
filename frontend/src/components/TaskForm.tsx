@@ -125,34 +125,32 @@ export function TaskForm() {
         <div className="panel rounded-xl overflow-hidden transition-colors duration-150 focus-within:border-brand-500/60 focus-within:ring-1 focus-within:ring-brand-500/25">
           {/* Top Context Strip: Repo / Branch / Source Switch */}
           <div className="px-3.5 py-2.5 bg-[#121318] border-b border-white/[0.06] flex flex-wrap items-center gap-2">
-            {!demoMode && (
-              <div className="inline-flex p-0.5 rounded-lg bg-[#09090b] border border-white/[0.07] flex-shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setSourceType('url')}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${
-                    sourceType === 'url'
-                      ? 'bg-[#1c1f29] text-zinc-100'
-                      : 'text-zinc-500 hover:text-zinc-300'
-                  }`}
-                >
-                  <Link2 className="w-3 h-3" />
-                  <span>Git</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSourceType('zip')}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${
-                    sourceType === 'zip'
-                      ? 'bg-[#1c1f29] text-zinc-100'
-                      : 'text-zinc-500 hover:text-zinc-300'
-                  }`}
-                >
-                  <FolderArchive className="w-3 h-3" />
-                  <span>ZIP</span>
-                </button>
-              </div>
-            )}
+            <div className="inline-flex p-0.5 rounded-lg bg-[#09090b] border border-white/[0.07] flex-shrink-0">
+              <button
+                type="button"
+                onClick={() => setSourceType('url')}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${
+                  sourceType === 'url'
+                    ? 'bg-[#1c1f29] text-zinc-100'
+                    : 'text-zinc-500 hover:text-zinc-300'
+                }`}
+              >
+                <Link2 className="w-3 h-3" />
+                <span>Git</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setSourceType('zip')}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${
+                  sourceType === 'zip'
+                    ? 'bg-[#1c1f29] text-zinc-100'
+                    : 'text-zinc-500 hover:text-zinc-300'
+                }`}
+              >
+                <FolderArchive className="w-3 h-3" />
+                <span>ZIP</span>
+              </button>
+            </div>
 
             {sourceType === 'url' ? (
               <div className="flex-1 min-w-[220px] flex flex-col sm:flex-row items-stretch sm:items-center gap-2">

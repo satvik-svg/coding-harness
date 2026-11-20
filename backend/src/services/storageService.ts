@@ -7,6 +7,9 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { AppError } from '../middlewares/errorHandler';
 
+const MAX_EXTRACTED_BYTES = 150 * 1024 * 1024; // 150 MB uncompressed safety cap
+const MAX_ZIP_ENTRIES = 10_000;
+
 // Ensure upload directory exists
 if (!fs.existsSync(config.uploadsDir)) {
   fs.mkdirSync(config.uploadsDir, { recursive: true });
@@ -46,23 +49,48 @@ export const uploadZipMiddleware = multer({
   fileFilter,
 });
 
+function shouldSkipZipEntry(entryPath: string): boolean {
+  const normalized = entryPath.replace(/\\/g, '/').replace(/^\/+/, '');
+  const segments = normalized.split('/').filter(Boolean);
+  if (segments.length === 0) return true;
+  if (segments[0] === '__MACOSX') return true;
+  if (segments.includes('.git')) return true;
+  if (segments[segments.length - 1] === '.DS_Store') return true;
+  return false;
+}
+
 export class StorageService {
   /**
    * Safely extracts a zip archive into a destination directory,
-   * with strict path verification to prevent Zip Slip directory traversal vulnerabilities.
+   * with strict Zip Slip path boundary verification, zip-bomb size/entry limits,
+   * and filtering of .git / __MACOSX metadata so Git diff tracking initializes cleanly.
    */
   static async extractZip(zipFilePath: string, targetDir: string): Promise<void> {
     logger.info(`Extracting zip ${zipFilePath} into ${targetDir}`);
     await fsp.mkdir(targetDir, { recursive: true });
 
     const resolvedTarget = path.resolve(targetDir);
+    const targetPrefix = `${resolvedTarget}${path.sep}`;
 
     const directory = await unzipper.Open.file(zipFilePath);
+    if (directory.files.length > MAX_ZIP_ENTRIES) {
+      throw new AppError(
+        `Zip archive exceeds maximum allowed entry count (${MAX_ZIP_ENTRIES})`,
+        400,
+        'ZIP_TOO_LARGE',
+      );
+    }
+
+    let extractedBytes = 0;
 
     for (const file of directory.files) {
-      // Guard against Zip Slip attacks
+      if (shouldSkipZipEntry(file.path)) {
+        continue;
+      }
+
+      // Guard against Zip Slip attacks (including sibling-prefix bypasses)
       const destinationPath = path.resolve(resolvedTarget, file.path);
-      if (!destinationPath.startsWith(resolvedTarget)) {
+      if (destinationPath !== resolvedTarget && !destinationPath.startsWith(targetPrefix)) {
         logger.error(`Suspicious zip entry prevented: ${file.path}`);
         throw new AppError(
           `Zip entry attempts directory traversal: ${file.path}`,
@@ -78,11 +106,28 @@ export class StorageService {
         await fsp.mkdir(parentDir, { recursive: true });
 
         await new Promise<void>((resolve, reject) => {
-          file
-            .stream()
-            .pipe(fs.createWriteStream(destinationPath))
-            .on('finish', () => resolve())
-            .on('error', (err) => reject(err));
+          const readStream = file.stream();
+          const writeStream = fs.createWriteStream(destinationPath);
+
+          readStream.on('data', (chunk: Buffer) => {
+            extractedBytes += chunk.length;
+            if (extractedBytes > MAX_EXTRACTED_BYTES) {
+              readStream.destroy();
+              writeStream.destroy();
+              reject(
+                new AppError(
+                  'Zip archive exceeds maximum uncompressed size limit (150 MB)',
+                  400,
+                  'ZIP_TOO_LARGE',
+                ),
+              );
+            }
+          });
+
+          readStream.on('error', reject);
+          writeStream.on('error', reject);
+          writeStream.on('finish', () => resolve());
+          readStream.pipe(writeStream);
         });
       }
     }

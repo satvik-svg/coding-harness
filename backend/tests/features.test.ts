@@ -1,9 +1,12 @@
 import assert from 'assert';
 import fs from 'fs/promises';
+import os from 'os';
 import path from 'path';
 import http from 'http';
+import { execFileSync } from 'child_process';
 import { createApp } from '../src/app';
 import { GitService } from '../src/services/gitService';
+import { StorageService } from '../src/services/storageService';
 import {
   registerActiveTask,
   cancelActiveTask,
@@ -263,6 +266,53 @@ async function testReadOnlyModeAndCostGuardrails() {
   );
 }
 
+async function testZipExtractAndBaselineDiff() {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'ch-zip-test-'));
+  const srcDir = path.join(tmp, 'src');
+  const outDir = path.join(tmp, 'out');
+  const zipPath = path.join(tmp, 'repo.zip');
+
+  try {
+    await fs.mkdir(path.join(srcDir, '.git'), { recursive: true });
+    await fs.mkdir(path.join(srcDir, '__MACOSX'), { recursive: true });
+    await fs.writeFile(path.join(srcDir, 'hello.js'), 'console.log("v1");\n', 'utf8');
+    await fs.writeFile(path.join(srcDir, '.git', 'HEAD'), 'ref: refs/heads/old\n', 'utf8');
+    await fs.writeFile(path.join(srcDir, '__MACOSX', 'junk'), 'junk\n', 'utf8');
+
+    // Create zip archive using python3 zipfile (portable on macOS and Linux)
+    execFileSync('python3', [
+      '-c',
+      `import os, sys, zipfile
+src, dest = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(dest, 'w') as zf:
+    for root, _, files in os.walk(src):
+        for f in files:
+            full = os.path.join(root, f)
+            zf.write(full, os.path.relpath(full, src))`,
+      srcDir,
+      zipPath,
+    ]);
+
+    await StorageService.extractZip(zipPath, outDir);
+
+    // Extracted hello.js exists, while .git and __MACOSX were stripped
+    const extracted = await fs.readFile(path.join(outDir, 'hello.js'), 'utf8');
+    assert.strictEqual(extracted, 'console.log("v1");\n');
+    const outEntries = await fs.readdir(outDir);
+    assert.ok(!outEntries.includes('.git'), '.git inside uploaded zip must be stripped');
+    assert.ok(!outEntries.includes('__MACOSX'), '__MACOSX inside uploaded zip must be stripped');
+
+    // Baseline git init + diff works cleanly
+    await GitService.initRepository(outDir);
+    const baseCommit = await GitService.getHeadCommit(outDir);
+    await fs.writeFile(path.join(outDir, 'hello.js'), 'console.log("v2");\n', 'utf8');
+    const diff = await GitService.getGitDiff(outDir, baseCommit);
+    assert.ok(diff.includes('+console.log("v2");'), 'Diff should capture edits on zip workspace');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+}
+
 async function run() {
   await testTaskRegistryAndCancellation();
   await testClaudeCodeAbortSignal();
@@ -272,7 +322,8 @@ async function run() {
   await testPrivateTaskRoutesRequireAuth();
   await testPrepareWorkspaceCleansStaleFiles();
   await testReadOnlyModeAndCostGuardrails();
-  console.log('All feature, OAuth, private workspace, and read-only mode tests passed.');
+  await testZipExtractAndBaselineDiff();
+  console.log('All feature, OAuth, private workspace, read-only, and zip archive tests passed.');
   process.exit(0);
 }
 

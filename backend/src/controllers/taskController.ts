@@ -98,10 +98,7 @@ export async function createTask(
       );
     }
 
-    if (config.aiProvider === 'claude-code') {
-      if (uploadedFile) {
-        throw new AppError('This demo accepts public GitHub URLs only', 400, 'INVALID_INPUT');
-      }
+    if (config.aiProvider === 'claude-code' && !uploadedFile) {
       validateDemoGitHubUrl(repoUrl);
     }
 
